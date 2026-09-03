@@ -1,0 +1,5 @@
+game: hulhe
+solver: deep_cfr
+# not for v1 — placeholder hyperparameters
+# iterations: 0
+# abstraction: null

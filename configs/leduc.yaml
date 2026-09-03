@@ -1,0 +1,6 @@
+game: leduc
+solver: deep_cfr
+iterations: 100000
+# gnn:
+#   hidden_dim: 128
+#   layers: 4
