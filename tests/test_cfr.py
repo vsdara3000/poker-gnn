@@ -12,10 +12,12 @@ import pytest
 
 from poker_gnn.games.base import Action
 from poker_gnn.games.kuhn import KuhnPoker
+from poker_gnn.games.leduc import LeducPoker
 from poker_gnn.solver.cfr import TabularCFR
 from poker_gnn.eval.exploitability import exploitability
 
 ITERATIONS = 20000
+LEDUC_ITERATIONS = 300
 
 
 def _uniform_strategy(game):
@@ -110,3 +112,26 @@ def test_alpha_family_relationship_holds(kuhn_average_strategy):
 
     assert 0.0 <= alpha <= 1 / 3 + 0.03
     assert king_bet == pytest.approx(3 * alpha, abs=0.05)
+
+
+@pytest.fixture(scope="module")
+def leduc_average_strategy():
+    game = LeducPoker()
+    cfr = TabularCFR()
+    cfr.iterate(game, LEDUC_ITERATIONS)
+    return game, cfr.average_strategy()
+
+
+def test_leduc_cfr_converges_far_below_uniform_random(leduc_average_strategy):
+    game, strategy = leduc_average_strategy
+    cfr_exploitability = exploitability(game, strategy)
+    uniform_exploitability = exploitability(game, _uniform_strategy(game))
+
+    assert cfr_exploitability < uniform_exploitability / 10
+
+
+def test_leduc_average_strategy_is_a_valid_distribution(leduc_average_strategy):
+    _, strategy = leduc_average_strategy
+    for probs in strategy.values():
+        assert all(0.0 <= p <= 1.0 for p in probs.values())
+        assert sum(probs.values()) == pytest.approx(1.0, abs=1e-6)

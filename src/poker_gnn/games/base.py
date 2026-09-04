@@ -31,6 +31,12 @@ class State:
     round: int
     terminal: bool
     chance: bool
+    # Index into `history` where the *current* betting round's actions start.
+    # `history` itself always spans the whole hand (needed for infoset_key:
+    # a player can observe every round's public betting, not just the
+    # current round's), so multi-round games use this to recover the
+    # current round's local sub-sequence. Always 0 for single-round games.
+    round_start: int = 0
 
     def infoset_key(self, player: int) -> str:
         """Player's information set: own cards + public history, not opponent cards."""
@@ -71,6 +77,12 @@ class Game(ABC):
     @abstractmethod
     def num_cards(self) -> int:
         ...
+
+    def num_suits(self) -> int:
+        """Cards are grouped into contiguous rank-blocks of this size, i.e.
+        card id `i` has rank `i // num_suits()`. 1 means every card is its
+        own rank (Kuhn); Leduc's 6-card deck (3 ranks x 2 suits) is 2."""
+        return 1
 
     def is_terminal(self, state: State) -> bool:
         return state.terminal
