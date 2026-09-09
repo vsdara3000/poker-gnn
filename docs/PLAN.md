@@ -48,11 +48,24 @@ Built and tested so far:
 - `graphs/infoset_graph.py` fixed to flag *both* hero hole cards (was only flagging one — a real gap for any 2-card-hand game, silent before HULHE existed to expose it).
 - `eval/baseline_eval.py` — since exact best-response (`exploitability()`) also requires full enumeration and can't run on HULHE, this instead plays a strategy against fixed baselines (always-fold, always-call, uniform-random) over many simulated hands and reports average chip EV. **This is not a Nash-distance metric** — beating the baselines shows the strategy learned *something*, not how close it is to equilibrium. Validated against Kuhn (`tests/test_baseline_eval.py`).
 
-Not done yet / next steps:
+Run so far (`DeepCFR(external_sampling=True)` directly on HULHE, not yet committed as a script):
 
-- Never actually run `DeepCFR(external_sampling=True)` on HULHE itself — only validated the machinery on Kuhn. Next step is a timing check (how long does one iteration take on the real game?) before committing to any training run.
-- No `TabularCFR`-equivalent run on HULHE via `ExternalSamplingCFR` either, for the same reason — worth trying since it's much cheaper per iteration than DeepCFR (no network forward/backward pass).
-- No results yet: exploitability trend, baseline-eval numbers, or a "done when" call for phase 3.
+- Timing: ~0.25-0.4s/iteration (varies run to run). 500 iterations took 125s and touched 49,427 distinct information sets.
+- Baseline-eval @ 500 iterations, default hyperparameters (hidden_dim=32, buffer_capacity=4000, train_steps_per_iteration=4): crushes always-fold (+0.96 as P0, +1.00 as P1), but **loses to always-call** (-0.213 as P0, -0.086 as P1) and is mixed/losing to uniform-random as P0 (-0.543; +0.625 as P1). Reads as "pipeline works end-to-end on the real game" rather than "strategy is any good" — expected at this scale (10^14 infosets, only 500 iterations).
+- Tried a "bigger" config (hidden_dim=64, buffer_capacity=20000, train_steps_per_iteration=8) at 300 iterations each, single seed: modestly better on 3/4 metrics vs the 32-unit default (e.g. vs-call as P0: -0.414 vs -0.607), worse on 1, small effect size, not a rigorous comparison (one seed, short run) -- inconclusive but no clear downside either.
+- Paused before deciding on a longer run or locking in a config.
+
+GPU / parallelism plan (agreed with user, not yet started):
+
+- There's an NVIDIA RTX 4050 (6GB) visible from WSL, but the installed torch is CPU-only (`torch==2.14.0+cpu`). `cuda.is_available()` is False for that reason, not because there's no GPU.
+- A GPU (or more CPU throughput) won't help the *sampled* traversal as currently written: `DeepCFR._predict_one` calls the network on one graph at a time as the traversal walks a sampled path, and HULHE's infoset space (~10^14) is too big to precompute/batch up front the way Leduc's ~936 infosets were (`_enumerate_infosets` + `_predict_all`, which is what made Leduc's batching win real). Installing CUDA torch and pointing this at the GPU as-is would likely be *slower*, not faster.
+- The actual fix: restructure the sampled traversal to run several independent traversals concurrently and batch their network queries together (e.g. K traversals in lockstep, each pausing whenever it needs a prediction, collect all pending requests, one batched forward pass, resume all K). This is a real architecture change (coroutine/generator-style traversal), not a config flag -- and is the prerequisite for a GPU (or more CPU cores) to help at all here.
+- Agreed plan: do that batched-parallel-traversal restructuring first, then install CUDA-enabled torch and compare GPU vs CPU on the batched version.
+
+Other not done yet:
+
+- No `TabularCFR`-equivalent run on HULHE via `ExternalSamplingCFR` either, for the same reason -- worth trying since it's much cheaper per iteration than DeepCFR (no network forward/backward pass).
+- No exploitability trend or a "done when" call for phase 3 -- only baseline-eval numbers so far, and only at small iteration counts.
 - `scripts/train.py` / `scripts/solve_tabular.py` don't have a HULHE-specific CLI path yet (solve_tabular.py works generically via `make_game`, but doesn't know to use `ExternalSamplingCFR` instead of `TabularCFR` for a game this size).
 
 ## Shared pieces (keep game-agnostic)
