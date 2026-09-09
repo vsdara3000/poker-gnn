@@ -37,11 +37,17 @@ class State:
     # current round's), so multi-round games use this to recover the
     # current round's local sub-sequence. Always 0 for single-round games.
     round_start: int = 0
+    # A second hole card per player, for games that deal more than one (only
+    # HULHE so far). Kuhn/Leduc deal exactly one and leave this (None, None),
+    # so infoset_key's formatting of it is a no-op for them.
+    hole_cards2: tuple[int | None, int | None] = (None, None)
 
     def infoset_key(self, player: int) -> str:
         """Player's information set: own cards + public history, not opponent cards."""
         hole = self.hole_cards[player]
-        return f"{player}|h{hole}|b{self.board}|r{self.round}|a{self.history}"
+        hole2 = self.hole_cards2[player]
+        extra = f"|h2{hole2}" if hole2 is not None else ""
+        return f"{player}|h{hole}{extra}|b{self.board}|r{self.round}|a{self.history}"
 
 
 class Game(ABC):

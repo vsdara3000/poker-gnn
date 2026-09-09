@@ -37,6 +37,24 @@ Same interfaces, bigger tree: two betting rounds and a public card. Reuse the Ku
 
 Same idea at hold'em scale. Do not try a full Cepheus-style solve. Abstraction, sampling, and compute come after Leduc works.
 
+### Status (in progress, paused here)
+
+Built and tested so far:
+
+- `utils/cards.py` — 5/6/7-card hand evaluator (`evaluate_hand`), validated both by unit tests and by sampling 200k random 5-card hands and matching known category odds (`tests/test_cards.py`).
+- `games/hulhe.py` — full rules: 2 hole cards/player, 4 rounds (preflop/flop/turn/river), blinds + the big-blind option, small/big bet sizing, a 4-raise cap per round. `base.State` gained `hole_cards2` (second hole card) and `round_start` was already there from Leduc. Validated via scripted lines (blind option, raise cap, fold payoffs, a real quads-vs-full-house showdown) plus 20k random Monte Carlo playouts checked for zero-sum / no negative stacks (`tests/test_hulhe.py`). The full tree is too big to enumerate (~10^14 infosets), so unlike Kuhn/Leduc there's no exhaustive tree test here.
+- `solver/mccfr.py` (`ExternalSamplingCFR`) — tabular CFR replacement for games too big for full-width traversal: only the traverser's own decisions branch over every action; opponent + chance are sampled once. Validated against Kuhn's known closed-form Nash mix (`tests/test_mccfr.py`) before trusting it on HULHE.
+- `solver/deep_cfr.py` gained `external_sampling=True` mode — same sampling algorithm, GNN instead of a regret table. Validated on Kuhn (`tests/test_deep_cfr.py::test_sampled_deep_cfr_*`).
+- `graphs/infoset_graph.py` fixed to flag *both* hero hole cards (was only flagging one — a real gap for any 2-card-hand game, silent before HULHE existed to expose it).
+- `eval/baseline_eval.py` — since exact best-response (`exploitability()`) also requires full enumeration and can't run on HULHE, this instead plays a strategy against fixed baselines (always-fold, always-call, uniform-random) over many simulated hands and reports average chip EV. **This is not a Nash-distance metric** — beating the baselines shows the strategy learned *something*, not how close it is to equilibrium. Validated against Kuhn (`tests/test_baseline_eval.py`).
+
+Not done yet / next steps:
+
+- Never actually run `DeepCFR(external_sampling=True)` on HULHE itself — only validated the machinery on Kuhn. Next step is a timing check (how long does one iteration take on the real game?) before committing to any training run.
+- No `TabularCFR`-equivalent run on HULHE via `ExternalSamplingCFR` either, for the same reason — worth trying since it's much cheaper per iteration than DeepCFR (no network forward/backward pass).
+- No results yet: exploitability trend, baseline-eval numbers, or a "done when" call for phase 3.
+- `scripts/train.py` / `scripts/solve_tabular.py` don't have a HULHE-specific CLI path yet (solve_tabular.py works generically via `make_game`, but doesn't know to use `ExternalSamplingCFR` instead of `TabularCFR` for a game this size).
+
 ## Shared pieces (keep game-agnostic)
 
 - `games/base.py` — `Game` / `State` / actions

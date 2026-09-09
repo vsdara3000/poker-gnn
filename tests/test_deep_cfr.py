@@ -85,3 +85,29 @@ def test_leduc_average_strategy_is_a_valid_distribution(leduc_deep_cfr_strategy)
     for probs in strategy.values():
         assert all(0.0 <= p <= 1.0 for p in probs.values())
         assert sum(probs.values()) == pytest.approx(1.0, abs=1e-6)
+
+
+@pytest.fixture(scope="module")
+def kuhn_sampled_deep_cfr_strategy():
+    # external_sampling=True is the mode HULHE needs (nothing there can be
+    # enumerated); validate it here on Kuhn, where the answer is known,
+    # before trusting it on a game with no exact reference solution.
+    game = KuhnPoker()
+    solver = DeepCFR(seed=0, external_sampling=True)
+    solver.train(game, 3000)
+    return game, solver.average_strategy()
+
+
+def test_sampled_deep_cfr_converges_far_below_uniform_random(kuhn_sampled_deep_cfr_strategy):
+    game, strategy = kuhn_sampled_deep_cfr_strategy
+    deep_cfr_exploitability = exploitability(game, strategy)
+    uniform_exploitability = exploitability(game, _uniform_strategy(game))
+
+    assert deep_cfr_exploitability < uniform_exploitability / 3
+
+
+def test_sampled_deep_cfr_average_strategy_is_a_valid_distribution(kuhn_sampled_deep_cfr_strategy):
+    _, strategy = kuhn_sampled_deep_cfr_strategy
+    for probs in strategy.values():
+        assert all(0.0 <= p <= 1.0 for p in probs.values())
+        assert sum(probs.values()) == pytest.approx(1.0, abs=1e-6)

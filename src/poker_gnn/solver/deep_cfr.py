@@ -1,17 +1,27 @@
 """Deep CFR with a GNN advantage network (Brown et al., 2019).
 
-Full-width tree traversal (chance summed exactly, both players' branches
-walked every iteration) rather than external sampling — Kuhn's and Leduc's
-trees are small enough not to need it, and it keeps this a direct neural
-analogue of `TabularCFR`. Per player, an advantage network regresses the
-instantaneous counterfactual regret observed at each visited infoset;
-regret matching over its predicted advantages gives the current-iteration
-strategy in place of a tabular regret table. The average strategy is still
-accumulated exactly like `TabularCFR` (a reach-weighted running sum keyed
-by infoset), since a few hundred/thousand infosets make a second averaging
-network unnecessary. Full-width traversal is the bottleneck at Leduc's
-scale (~1000 infosets, thousands of tree nodes visited per iteration) --
-HULHE's much larger tree will need external sampling instead.
+Two traversal modes, chosen by `external_sampling`:
+
+- Full-width (default): chance summed exactly, both players' branches
+  walked every iteration -- Kuhn's and Leduc's trees are small enough not
+  to need sampling, and it keeps this a direct neural analogue of
+  `TabularCFR`. Every infoset is enumerated once up front (`_enumerate_
+  infosets`) and predicted in one batched forward pass per player per
+  iteration (`_predict_all`).
+- External sampling (`external_sampling=True`, required for HULHE): same
+  algorithm as `solver.mccfr.ExternalSamplingCFR`, just with the GNN
+  standing in for the regret table -- only the traverser's own decisions
+  branch over every action; the opponent and chance are each sampled once.
+  Nothing can be enumerated up front (HULHE's ~10^14 infosets rule that
+  out), so predictions happen one infoset at a time as they're visited.
+
+Either way, per player, an advantage network regresses the instantaneous
+counterfactual regret observed at each visited infoset; regret matching
+over its predicted advantages gives the current-iteration strategy in
+place of a tabular regret table. The average strategy is still accumulated
+exactly like `TabularCFR` (a running sum keyed by infoset, reach-weighted
+in full-width mode; unweighted in sampling mode since the sampling itself
+already reflects reach probabilities -- same reasoning as `mccfr.py`).
 """
 
 from __future__ import annotations
@@ -69,6 +79,7 @@ class DeepCFR:
         train_steps_per_iteration: int = 4,
         seed: int | None = None,
         limit_threads: bool = True,
+        external_sampling: bool = False,
     ):
         if limit_threads:
             # Kuhn/Leduc-sized graphs are a handful to a couple dozen nodes;
@@ -86,6 +97,7 @@ class DeepCFR:
         self.lr = lr
         self.batch_size = batch_size
         self.train_steps_per_iteration = train_steps_per_iteration
+        self.external_sampling = external_sampling
         self._rng = random.Random(seed)
 
         self._networks: dict[int, PokerGNN] = {}
@@ -111,6 +123,13 @@ class DeepCFR:
         self._strategy_cache: dict[tuple[int, str], tuple[dict, object]] = {}
 
     def train(self, game, iterations: int):
+        if self.external_sampling:
+            for i in range(iterations):
+                traverser = i % 2
+                self._traverse_sampled(game, game.root(), traverser)
+                self._fit(traverser)
+            return self
+
         if self._infosets is None:
             self._infosets = self._enumerate_infosets(game)
         for _ in range(iterations):
@@ -189,6 +208,65 @@ class DeepCFR:
 
     def _predict_strategy(self, state, player: int) -> tuple[dict, object]:
         return self._strategy_cache[(player, state.infoset_key(player))]
+
+    def _predict_one(self, game, state, player: int) -> tuple[dict, object]:
+        """Single-infoset version of `_predict_all`, for sampled mode where
+        the infoset space can't be enumerated up front."""
+        legal = game.legal_actions(state)
+        data = self.encoder.encode(game, state, player)
+        net = self._network(player)
+        net.eval()
+        with torch.no_grad():
+            advantages, _ = net(Batch.from_data_list([data]))
+        advantages = advantages[0]
+        positive = {a: max(advantages[a].item(), 0.0) for a in legal}
+        total = sum(positive.values())
+        if total > 0:
+            strategy = {a: v / total for a, v in positive.items()}
+        else:
+            strategy = {a: 1.0 / len(legal) for a in legal}
+        return strategy, data
+
+    def _sample(self, outcomes):
+        items = [item for item, _ in outcomes]
+        weights = [weight for _, weight in outcomes]
+        return self._rng.choices(items, weights=weights, k=1)[0]
+
+    def _traverse_sampled(self, game, state, traverser: int) -> float:
+        """External-sampling counterpart to `_traverse`: only `traverser`'s
+        own decisions branch over every action; the opponent and chance are
+        each sampled once. See `solver.mccfr.ExternalSamplingCFR`, which
+        this mirrors -- same algorithm, GNN instead of a regret table."""
+        if state.terminal:
+            return game.returns(state)[traverser]
+
+        if state.chance:
+            outcome = self._sample(game.chance_outcomes(state))
+            return self._traverse_sampled(game, game.step(state, outcome), traverser)
+
+        player = state.player
+        legal = game.legal_actions(state)
+        strategy, data = self._predict_one(game, state, player)
+
+        if player == traverser:
+            action_values = {}
+            node_value = 0.0
+            for action in legal:
+                v = self._traverse_sampled(game, game.step(state, action), traverser)
+                action_values[action] = v
+                node_value += strategy[action] * v
+            target = torch.zeros(NUM_ACTIONS)
+            for action in legal:
+                target[action] = action_values[action] - node_value
+            self._buffers[player].add((data, target))
+            return node_value
+
+        key = state.infoset_key(player)
+        sums = self._strategy_sum.setdefault(key, {a: 0.0 for a in legal})
+        for action in legal:
+            sums[action] += strategy[action]
+        action = self._sample([(a, strategy[a]) for a in legal])
+        return self._traverse_sampled(game, game.step(state, action), traverser)
 
     def _traverse(self, game, state, reach0: float, reach1: float) -> tuple[float, float]:
         if state.terminal:
