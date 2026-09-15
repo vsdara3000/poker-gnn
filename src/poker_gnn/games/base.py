@@ -90,6 +90,18 @@ class Game(ABC):
         own rank (Kuhn); Leduc's 6-card deck (3 ranks x 2 suits) is 2."""
         return 1
 
+    def hand_strength(self, hole_cards: tuple[int, ...], board: tuple[int, ...]) -> float | None:
+        """Optional [0, 1] made-hand-strength scalar for `hole_cards` given
+        `board`, so the GNN gets an explicit hint instead of having to
+        rediscover this game's hand rankings from raw graph structure alone
+        -- worth little in Kuhn/Leduc (rank comparison is nearly the whole
+        game already, and the card graph's rank/pair edges cover it), but
+        HULHE's flush/straight/full-house rankings are a lot to ask a small
+        GNN to learn purely from message passing over a 52-card graph.
+        None if not applicable (e.g. too few cards revealed yet, or the
+        game doesn't define one)."""
+        return None
+
     def is_terminal(self, state: State) -> bool:
         return state.terminal
 

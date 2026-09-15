@@ -111,3 +111,40 @@ def test_sampled_deep_cfr_average_strategy_is_a_valid_distribution(kuhn_sampled_
     for probs in strategy.values():
         assert all(0.0 <= p <= 1.0 for p in probs.values())
         assert sum(probs.values()) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_policy_falls_back_to_the_strategy_network_for_unvisited_infosets():
+    # A deliberately tiny run so some of Kuhn's 12 infosets are never
+    # directly visited (average_strategy()'s dict can't cover them) --
+    # policy() should still return a real, trained, properly-normalized
+    # distribution for those, not silently default to uniform random.
+    game = KuhnPoker()
+    solver = DeepCFR(seed=0, external_sampling=True, parallel_traversals=4)
+    solver.train(game, 20)
+
+    visited = set(solver._strategy_sum)
+    unvisited_states = []
+
+    def walk(state):
+        if state.terminal:
+            return
+        if state.chance:
+            for outcome, _ in game.chance_outcomes(state):
+                walk(game.step(state, outcome))
+            return
+        if state.infoset_key(state.player) not in visited:
+            unvisited_states.append(state)
+        for action in game.legal_actions(state):
+            walk(game.step(state, action))
+
+    walk(game.root())
+    assert unvisited_states  # the whole point of this test needs at least one
+
+    for state in unvisited_states:
+        probs = solver.policy(game, state)
+        legal = set(game.legal_actions(state))
+        assert set(probs) == legal
+        assert sum(probs.values()) == pytest.approx(1.0, abs=1e-4)
+        # a real (if untrained) network prediction, not the uniform fallback
+        if len(legal) > 1:
+            assert len(set(round(p, 6) for p in probs.values())) > 1

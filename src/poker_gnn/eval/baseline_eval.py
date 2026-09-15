@@ -55,6 +55,24 @@ def make_strategy_policy(strategy: dict, rng: random.Random) -> Policy:
     return policy
 
 
+def make_solver_policy(solver, rng: random.Random) -> Policy:
+    """Samples from `solver.policy(game, state)` instead of a plain dict
+    (`make_strategy_policy`). Use this for a solver exposing a hybrid
+    exact-dict/network-fallback lookup (`DeepCFR.policy` in `external_
+    sampling` mode) so evaluation reflects what the network generalized
+    to, not just the infosets it happened to visit during training."""
+
+    def policy(game, state) -> int:
+        legal = game.legal_actions(state)
+        probs = solver.policy(game, state)
+        weights = [probs.get(a, 0.0) for a in legal]
+        if sum(weights) <= 0:
+            return rng.choice(legal)
+        return rng.choices(legal, weights=weights, k=1)[0]
+
+    return policy
+
+
 def average_payoff(
     game, policies: dict[int, Policy], num_hands: int, rng: random.Random
 ) -> tuple[float, float]:

@@ -21,7 +21,7 @@ response, both need a sampling-based replacement before they can run here.
 from __future__ import annotations
 
 from poker_gnn.games.base import Action, Player, Game, State
-from poker_gnn.utils.cards import deck_card_names, evaluate_hand
+from poker_gnn.utils.cards import STRAIGHT_FLUSH, deck_card_names, evaluate_hand
 
 SMALL_BLIND = 1
 BIG_BLIND = 2
@@ -332,3 +332,10 @@ class HeadsUpLimitHoldem(Game):
 
     def num_suits(self) -> int:
         return 4
+
+    def hand_strength(self, hole_cards: tuple[int, ...], board: tuple[int, ...]) -> float | None:
+        cards = [*hole_cards, *board]
+        if len(cards) < 5:
+            return None  # preflop: no made-hand ranking exists yet
+        category = evaluate_hand(cards)[0]
+        return category / STRAIGHT_FLUSH
