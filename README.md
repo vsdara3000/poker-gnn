@@ -13,11 +13,16 @@ pytest
 # Tabular CFR on a small game (exact for Kuhn/Leduc)
 python scripts/solve_tabular.py --game kuhn --iterations 20000
 
+# Deep CFR / GNN or tabular external-sampling CFR, any game
+python scripts/train.py --game kuhn --solver deep_cfr --iterations 2000
+python scripts/train.py --game hulhe --solver deep_cfr --iterations 5000
+python scripts/train.py --game hulhe --solver mccfr --iterations 20000
+
 # Play a hand of Kuhn by hand, for poking at the rules
 PYTHONPATH=src python3 scripts/play_kuhn.py
 ```
 
-`scripts/train.py` and `scripts/evaluate.py` are not wired up yet; Deep CFR / external-sampling CFR and baseline evaluation on HULHE are currently driven directly from `poker_gnn.solver` / `poker_gnn.eval` (see `docs/PLAN.md` and `tests/test_deep_cfr.py`, `tests/test_mccfr.py`, `tests/test_baseline_eval.py` for usage examples), not yet from a CLI.
+`scripts/train.py` reports exact exploitability for kuhn/leduc and baseline-eval chip EV (vs. fold/call/random) for hulhe. `scripts/evaluate.py` is still a stub.
 
 ## Layout
 

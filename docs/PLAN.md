@@ -79,11 +79,13 @@ Architecture changes (done, from a "what else besides more iterations" discussio
 
 Not implemented: explicit opponent range/belief-state estimation (Bayesian, DeepStack-style) -- discussed as a further idea, judged bigger than the above two and deferred pending whether they move the needle enough on their own.
 
+`scripts/train.py` -- done. Was a stub; now a generic CLI over any game/solver combo: `--solver deep_cfr` (GNN, external-sampling on by default for hulhe, off for kuhn/leduc, overridable via `--external-sampling`/`--no-external-sampling`) or `--solver mccfr` (plain `ExternalSamplingCFR`, no network -- the cheap tabular baseline on HULHE that was missing). Reports exact `exploitability()` at each checkpoint for kuhn/leduc, `baseline_eval` chip EV vs. fold/call/random for hulhe (or for kuhn/leduc run in external-sampling mode). Smoke-tested on all four combinations (kuhn/leduc full-width, hulhe mccfr, hulhe deep_cfr external-sampling); full test suite (77 tests) unaffected.
+
 Other not done yet:
 
-- No `TabularCFR`-equivalent run on HULHE via `ExternalSamplingCFR` either, for the same reason -- worth trying since it's much cheaper per iteration than DeepCFR (no network forward/backward pass).
+- Haven't actually *used* the new `--solver mccfr` HULHE path for anything beyond the smoke test above -- next: a real run to see how tabular external-sampling CFR compares to Deep CFR per-iteration and per-wall-clock-second on HULHE.
 - No exploitability trend or a "done when" call for phase 3 -- only baseline-eval numbers so far, and only at small iteration counts.
-- `scripts/train.py` / `scripts/solve_tabular.py` don't have a HULHE-specific CLI path yet (solve_tabular.py works generically via `make_game`, but doesn't know to use `ExternalSamplingCFR` instead of `TabularCFR` for a game this size).
+- No multi-seed hyperparameter comparison yet for the "bigger" Deep CFR config vs. default -- `scripts/train.py` now makes this easy to script, just hasn't been run.
 
 ## Shared pieces (keep game-agnostic)
 
