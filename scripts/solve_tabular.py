@@ -15,6 +15,7 @@ def parse_args():
     parser.add_argument("--game", default="kuhn", help="kuhn, leduc, or hulhe")
     parser.add_argument("--iterations", type=int, default=20000)
     parser.add_argument("--checkpoints", type=int, default=10, help="progress prints during training")
+    parser.add_argument("--save", help="path to persist the trained solver to when done")
     return parser.parse_args()
 
 
@@ -37,6 +38,10 @@ def main():
     for key in sorted(strategy):
         probs = ", ".join(f"{action.name}={p:.3f}" for action, p in strategy[key].items())
         print(f"  {key}: {probs}")
+
+    if args.save:
+        cfr.save(args.save)
+        print(f"\nsaved solver to {args.save}")
 
 
 if __name__ == "__main__":

@@ -234,6 +234,58 @@ class DeepCFR:
                 result[key] = {a: 1.0 / len(sums) for a in sums}
         return result
 
+    def save(self, path: str) -> None:
+        """Persist the trained networks and the exact `_strategy_sum` dict
+        -- enough to call `policy()`/`average_strategy()` or resume training
+        later without starting over. Does *not* persist the reservoir
+        buffers or optimizer momentum: resuming restarts those from empty/
+        fresh, a minor, self-correcting cost (a few thousand iterations'
+        worth of buffer refill) against the size and complexity of also
+        checkpointing every buffered graph."""
+        state = {
+            "config": {
+                "hidden_dim": self.hidden_dim,
+                "lr": self.lr,
+                "buffer_capacity": self._buffers[0].capacity,
+                "batch_size": self.batch_size,
+                "train_steps_per_iteration": self.train_steps_per_iteration,
+                "external_sampling": self.external_sampling,
+                "parallel_traversals": self.parallel_traversals,
+                "node_feature_dim": self.encoder.node_feature_dim,
+            },
+            "strategy_sum": self._strategy_sum,
+            "networks": {p: net.state_dict() for p, net in self._networks.items()},
+            "policy_networks": {p: net.state_dict() for p, net in self._policy_networks.items()},
+        }
+        torch.save(state, path)
+
+    @classmethod
+    def load(cls, path: str, seed: int | None = None) -> "DeepCFR":
+        state = torch.load(path, weights_only=False)
+        cfg = state["config"]
+        solver = cls(
+            hidden_dim=cfg["hidden_dim"],
+            lr=cfg["lr"],
+            buffer_capacity=cfg["buffer_capacity"],
+            batch_size=cfg["batch_size"],
+            train_steps_per_iteration=cfg["train_steps_per_iteration"],
+            seed=seed,
+            external_sampling=cfg["external_sampling"],
+            parallel_traversals=cfg["parallel_traversals"],
+        )
+        solver._strategy_sum = state["strategy_sum"]
+        for player, state_dict in state["networks"].items():
+            net = PokerGNN(cfg["node_feature_dim"], cfg["hidden_dim"])
+            net.load_state_dict(state_dict)
+            solver._networks[player] = net
+            solver._optimizers[player] = torch.optim.Adam(net.parameters(), lr=cfg["lr"])
+        for player, state_dict in state["policy_networks"].items():
+            net = PokerGNN(cfg["node_feature_dim"], cfg["hidden_dim"])
+            net.load_state_dict(state_dict)
+            solver._policy_networks[player] = net
+            solver._policy_optimizers[player] = torch.optim.Adam(net.parameters(), lr=cfg["lr"])
+        return solver
+
     def _network(self, player: int) -> PokerGNN:
         if player not in self._networks:
             net = PokerGNN(self.encoder.node_feature_dim, self.hidden_dim)

@@ -8,6 +8,8 @@ the scale of Kuhn/Leduc. Regret matching + averaging follow Zinkevich et al.
 
 from __future__ import annotations
 
+import pickle
+
 
 class _InfosetNode:
     __slots__ = ("actions", "regret_sum", "strategy_sum")
@@ -50,6 +52,22 @@ class TabularCFR:
 
     def average_strategy(self) -> dict:
         return {key: node.average_strategy() for key, node in self._nodes.items()}
+
+    def save(self, path: str) -> None:
+        """Persist the trained regret table so `average_strategy()` (or
+        more training via `iterate()`) doesn't require re-solving from
+        scratch. `_InfosetNode` pickles directly despite `__slots__` --
+        no custom (de)serialization needed."""
+        with open(path, "wb") as f:
+            pickle.dump(self._nodes, f)
+
+    @classmethod
+    def load(cls, path: str) -> "TabularCFR":
+        with open(path, "rb") as f:
+            nodes = pickle.load(f)
+        solver = cls()
+        solver._nodes = nodes
+        return solver
 
     def _cfr(self, game, state, reach0: float, reach1: float) -> tuple[float, float]:
         if state.terminal:

@@ -21,6 +21,7 @@ calling `accumulate_strategy` with reach=1.0.
 
 from __future__ import annotations
 
+import pickle
 import random
 
 from poker_gnn.solver.cfr import _InfosetNode
@@ -41,6 +42,22 @@ class ExternalSamplingCFR:
 
     def average_strategy(self) -> dict:
         return {key: node.average_strategy() for key, node in self._nodes.items()}
+
+    def save(self, path: str) -> None:
+        """Persist the trained regret table. Doesn't preserve `_rng`'s exact
+        state (`load` starts a fresh one) -- future sampling won't be
+        bit-identical to an uninterrupted run, but training/averaging is
+        correct regardless, same as any other CFR checkpoint restart."""
+        with open(path, "wb") as f:
+            pickle.dump(self._nodes, f)
+
+    @classmethod
+    def load(cls, path: str, seed: int | None = None) -> "ExternalSamplingCFR":
+        with open(path, "rb") as f:
+            nodes = pickle.load(f)
+        solver = cls(seed=seed)
+        solver._nodes = nodes
+        return solver
 
     def _sample(self, outcomes):
         items = [item for item, _ in outcomes]

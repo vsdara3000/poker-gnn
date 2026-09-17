@@ -11,27 +11,20 @@ Examples:
   python scripts/train.py --game kuhn --solver deep_cfr --iterations 2000
   python scripts/train.py --game hulhe --solver deep_cfr --iterations 5000
   python scripts/train.py --game hulhe --solver mccfr --iterations 20000
+  python scripts/train.py --game hulhe --solver deep_cfr --iterations 5000 --save checkpoints/hulhe.pt
+
+`--save PATH` persists the trained solver at the end (see `<Solver>.save`/
+`.load`) so a later `scripts/evaluate.py --load PATH` run, or more training,
+doesn't need to start over.
 """
 
 import argparse
 import random
 
-from poker_gnn.eval.baseline_eval import (
-    average_payoff,
-    call_policy,
-    fold_policy,
-    make_random_policy,
-    make_solver_policy,
-    make_strategy_policy,
-)
-from poker_gnn.eval.exploitability import exploitability
+from _report import SMALL_GAMES, report_solver
 from poker_gnn.games import make_game
 from poker_gnn.solver.deep_cfr import DeepCFR
 from poker_gnn.solver.mccfr import ExternalSamplingCFR
-
-# kuhn/leduc are small enough to enumerate exactly (exploitability, full-width
-# Deep CFR); hulhe is not (~10^14 infosets) and needs sampling + baseline-eval.
-SMALL_GAMES = {"kuhn", "leduc"}
 
 
 def parse_args():
@@ -58,6 +51,7 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--train-steps", type=int, default=4)
     parser.add_argument("--parallel-traversals", type=int, default=16)
+    parser.add_argument("--save", help="path to persist the trained solver to when done")
     return parser.parse_args()
 
 
@@ -87,30 +81,6 @@ def run_iterations(solver, game, chunk: int) -> None:
         solver.train(game, chunk)
 
 
-def can_enumerate(args, solver) -> bool:
-    if args.game not in SMALL_GAMES:
-        return False
-    return isinstance(solver, ExternalSamplingCFR) or not solver.external_sampling
-
-
-def report(game, args, solver, rng: random.Random) -> None:
-    if can_enumerate(args, solver):
-        exp = exploitability(game, solver.average_strategy())
-        print(f"    exploitability={exp:.6f}")
-        return
-
-    if isinstance(solver, ExternalSamplingCFR):
-        policy = make_strategy_policy(solver.average_strategy(), rng)
-    else:
-        policy = make_solver_policy(solver, rng)
-
-    baselines = {"fold": fold_policy, "call": call_policy, "random": make_random_policy(rng)}
-    for name, opponent in baselines.items():
-        p0, _ = average_payoff(game, {0: policy, 1: opponent}, args.eval_hands, rng)
-        _, p1 = average_payoff(game, {0: opponent, 1: policy}, args.eval_hands, rng)
-        print(f"    vs_{name}: P0={p0:+.3f}  P1={p1:+.3f}")
-
-
 def main():
     args = parse_args()
     game = make_game(args.game)
@@ -124,7 +94,11 @@ def main():
         run_iterations(solver, game, chunk)
         done += chunk
         print(f"iterations={done:>8d}")
-        report(game, args, solver, rng)
+        report_solver(game, args.game, solver, rng, args.eval_hands)
+
+    if args.save:
+        solver.save(args.save)
+        print(f"saved solver to {args.save}")
 
 
 if __name__ == "__main__":
