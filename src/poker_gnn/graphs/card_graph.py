@@ -9,29 +9,38 @@ share a rank (a no-op for Kuhn, where no rank has more than one card).
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 import torch
 
 CARD_FEATURE_DIM = 1  # normalized rank value
 
 
 def card_graph(game):
-    """Node features (normalized rank) and rank-adjacency/pair edges."""
-    n = game.num_cards()
-    num_suits = game.num_suits()
-    num_ranks = n // num_suits
+    """Node features (normalized rank) and rank-adjacency/pair edges.
 
-    def rank(card: int) -> int:
-        return card // num_suits
+    Depends only on the deck's shape (`num_cards`/`num_suits`), never on any
+    per-instance state, so it's cached: `infoset_graph` calls this once per
+    infoset encoded, and at HULHE's 52-card scale the O(n^2) edge-building
+    below was ~44% of total training time before caching -- pure waste,
+    since it recomputed the exact same 52-node graph every single time."""
+    return _card_graph_cached(game.num_cards(), game.num_suits())
+
+
+@lru_cache(maxsize=None)
+def _card_graph_cached(n: int, num_suits: int):
+    num_ranks = n // num_suits
+    ranks = [i // num_suits for i in range(n)]
 
     x = torch.tensor(
-        [[rank(i) / (num_ranks - 1) if num_ranks > 1 else 0.0] for i in range(n)],
+        [[ranks[i] / (num_ranks - 1) if num_ranks > 1 else 0.0] for i in range(n)],
         dtype=torch.float32,
     )
 
     edges = []
     for a in range(n):
         for b in range(a + 1, n):
-            if rank(a) == rank(b) or abs(rank(a) - rank(b)) == 1:
+            if ranks[a] == ranks[b] or abs(ranks[a] - ranks[b]) == 1:
                 edges.append((a, b))
                 edges.append((b, a))
     edge_index = (
