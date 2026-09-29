@@ -138,3 +138,6 @@ class KuhnPoker(Game):
 
     def num_cards(self) -> int:
         return 3
+
+    def sample_showdown_equity(self, state: State, player: int, rng) -> float | None:
+        return 1.0 if state.hole_cards[player] > state.hole_cards[1 - player] else 0.0

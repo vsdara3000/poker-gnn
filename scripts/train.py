@@ -35,7 +35,14 @@ def parse_args():
     parser.add_argument("--solver", default="deep_cfr", choices=["deep_cfr", "mccfr"])
     parser.add_argument("--iterations", type=int, default=2000)
     parser.add_argument("--checkpoints", type=int, default=10, help="progress evaluations during training")
-    parser.add_argument("--eval-hands", type=int, default=2000, help="simulated hands per baseline matchup")
+    parser.add_argument("--eval-hands", type=int, default=2000, help="deals per baseline matchup (each played once from each seat)")
+    parser.add_argument("--lbr-hands", type=int, default=0, help="hulhe only: deals for a local-best-response exploitability bound (slow; 0 = off)")
+    parser.add_argument(
+        "--distill",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="mccfr on hulhe: fit a strategy net to the average-strategy dict before evaluating, instead of a uniform-random fallback",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--external-sampling",
@@ -51,6 +58,11 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--train-steps", type=int, default=4)
     parser.add_argument("--parallel-traversals", type=int, default=16)
+    parser.add_argument(
+        "--range-net",
+        action="store_true",
+        help="deep_cfr, external sampling only: learn an opponent-range estimate from betting and feed it to the networks",
+    )
     parser.add_argument("--save", help="path to persist the trained solver to when done")
     return parser.parse_args()
 
@@ -71,6 +83,7 @@ def make_solver(args):
         seed=args.seed,
         external_sampling=external_sampling,
         parallel_traversals=args.parallel_traversals,
+        range_net=args.range_net,
     )
 
 
@@ -94,7 +107,7 @@ def main():
         run_iterations(solver, game, chunk)
         done += chunk
         print(f"iterations={done:>8d}")
-        report_solver(game, args.game, solver, rng, args.eval_hands)
+        report_solver(game, args.game, solver, rng, args.eval_hands, args.lbr_hands, args.distill)
 
     if args.save:
         solver.save(args.save)

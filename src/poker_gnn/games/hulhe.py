@@ -339,3 +339,17 @@ class HeadsUpLimitHoldem(Game):
             return None  # preflop: no made-hand ranking exists yet
         category = evaluate_hand(cards)[0]
         return category / STRAIGHT_FLUSH
+
+    def sample_showdown_equity(self, state: State, player: int, rng) -> float | None:
+        opp = 1 - player
+        mine = [state.hole_cards[player], state.hole_cards2[player]]
+        theirs = [state.hole_cards[opp], state.hole_cards2[opp]]
+        if None in mine or None in theirs:
+            return None
+        board = list(state.board)
+        missing = 5 - len(board)
+        if missing:
+            board += rng.sample(self._remaining_cards(state), missing)
+        ours = evaluate_hand(mine + board)
+        other = evaluate_hand(theirs + board)
+        return 1.0 if ours > other else 0.5 if ours == other else 0.0

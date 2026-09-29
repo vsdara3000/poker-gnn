@@ -8,11 +8,13 @@ import pytest
 from poker_gnn.eval.baseline_eval import (
     average_payoff,
     call_policy,
+    evaluate_matchup,
     fold_policy,
     make_random_policy,
     make_strategy_policy,
 )
 from poker_gnn.games.base import Action
+from poker_gnn.games.hulhe import HeadsUpLimitHoldem
 from poker_gnn.games.kuhn import KuhnPoker
 from poker_gnn.solver.cfr import TabularCFR
 
@@ -77,3 +79,29 @@ def test_payoffs_always_sum_to_zero():
         game, {0: make_random_policy(rng), 1: make_random_policy(rng)}, 2000, rng
     )
     assert p0 + p1 == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("game", [KuhnPoker(), HeadsUpLimitHoldem()], ids=["kuhn", "hulhe"])
+def test_duplicate_eval_cancels_card_luck_exactly_for_mirrored_check_down(game):
+    # Two call-policy players check every hand down, so the result depends
+    # only on who holds the better cards. Duplicate play gives hero both
+    # hands of every deal, so hero's combined result must be exactly zero
+    # with zero spread -- any leak here means the two replays of a deal
+    # didn't actually see the same cards.
+    r = evaluate_matchup(game, call_policy, call_policy, num_deals=300, rng=random.Random(0))
+    assert r.duplicate == pytest.approx(0.0)
+    assert r.duplicate_se == pytest.approx(0.0)
+    assert r.as_p0_se > 0  # each seat on its own still sees card luck
+
+
+def test_duplicate_eval_agrees_with_plain_average_payoff():
+    game = KuhnPoker()
+    cfr = TabularCFR()
+    cfr.iterate(game, 20000)
+    hero = make_strategy_policy(cfr.average_strategy(), random.Random(1))
+    r = evaluate_matchup(game, hero, call_policy, num_deals=4000, rng=random.Random(0))
+    plain_p0 = average_payoff(game, {0: hero, 1: call_policy}, 4000, random.Random(2))[0]
+    # Same quantity, independent samples: must agree within a few SEs.
+    assert abs(r.as_p0 - plain_p0) < 4 * r.as_p0_se * 2**0.5
+    assert r.duplicate == pytest.approx((r.as_p0 + r.as_p1) / 2)
+    assert r.duplicate > 0

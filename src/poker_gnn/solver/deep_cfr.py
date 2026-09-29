@@ -39,6 +39,22 @@ Brown et al.'s original Deep CFR -- everywhere else, so a strategy built
 from this training run actually generalizes past the exact infosets it
 visited, rather than silently defaulting to uniform random outside them
 the way a pure dict lookup (`average_strategy()`) does.
+
+`range_net=True` (external-sampling mode only) adds a third network per
+player that *ranges the opponent*. Traversal deals real cards to both
+players, so at every decision a player makes we know what the opponent
+actually holds. The range network learns to predict two things from the
+acting player's infoset alone: their showdown equity against the
+opponent's actual hand (`Game.sample_showdown_equity`, one random board
+rollout per example), and the opponent's made-hand strength (`Game.hand_
+strength` on the opponent's cards). Since the infoset shows the hero only
+their own cards and the public betting, the one way to predict these beyond
+the no-information average is to read the opponent's betting pattern. It
+is a learned version of Bayesian range estimation: its target is exactly
+the posterior under how the opponent currently plays, and it costs one
+forward pass instead of a Bayes update over all 1,326 hands. Both
+predictions are fed to the advantage and strategy networks as extra
+per-graph input features (`PokerGNN`'s `extra`).
 """
 
 from __future__ import annotations
@@ -52,8 +68,11 @@ from torch_geometric.data import Batch
 from poker_gnn.games.base import Action
 from poker_gnn.models.encoder import InfosetEncoder
 from poker_gnn.models.gnn import PokerGNN
+from poker_gnn.solver.policy_net import fit_policy_step, network_policy_batch, policy_example
 
 NUM_ACTIONS = len(Action)
+# Range network outputs: [hero showdown equity, opponent made-hand strength]
+RANGE_OUTPUTS = 2
 
 
 class _ReservoirBuffer:
@@ -98,7 +117,10 @@ class DeepCFR:
         limit_threads: bool = True,
         external_sampling: bool = False,
         parallel_traversals: int = 16,
+        range_net: bool = False,
     ):
+        if range_net and not external_sampling:
+            raise ValueError("range_net needs external_sampling=True (it learns from sampled deals)")
         if limit_threads:
             # Kuhn/Leduc-sized graphs are a handful to a couple dozen nodes;
             # torch's intra-op thread pool spends far more time coordinating
@@ -117,6 +139,8 @@ class DeepCFR:
         self.train_steps_per_iteration = train_steps_per_iteration
         self.external_sampling = external_sampling
         self.parallel_traversals = parallel_traversals
+        self.range_net = range_net
+        self._extra_dim = RANGE_OUTPUTS if range_net else 0
         self._rng = random.Random(seed)
 
         self._networks: dict[int, PokerGNN] = {}
@@ -132,6 +156,14 @@ class DeepCFR:
         self._policy_networks: dict[int, PokerGNN] = {}
         self._policy_optimizers: dict[int, torch.optim.Optimizer] = {}
         self._policy_buffers: dict[int, _ReservoirBuffer] = {
+            0: _ReservoirBuffer(buffer_capacity, self._rng),
+            1: _ReservoirBuffer(buffer_capacity, self._rng),
+        }
+        # Opponent-range network per player (only with range_net=True): see
+        # the module docstring.
+        self._range_networks: dict[int, PokerGNN] = {}
+        self._range_optimizers: dict[int, torch.optim.Optimizer] = {}
+        self._range_buffers: dict[int, _ReservoirBuffer] = {
             0: _ReservoirBuffer(buffer_capacity, self._rng),
             1: _ReservoirBuffer(buffer_capacity, self._rng),
         }
@@ -161,6 +193,7 @@ class DeepCFR:
                 remaining -= batch
                 self._run_batch(game, traversers)
                 for player in set(traversers):
+                    self._fit_range(player)
                     self._fit(player)
                     self._fit_policy(player)
             return self
@@ -252,10 +285,12 @@ class DeepCFR:
                 "external_sampling": self.external_sampling,
                 "parallel_traversals": self.parallel_traversals,
                 "node_feature_dim": self.encoder.node_feature_dim,
+                "range_net": self.range_net,
             },
             "strategy_sum": self._strategy_sum,
             "networks": {p: net.state_dict() for p, net in self._networks.items()},
             "policy_networks": {p: net.state_dict() for p, net in self._policy_networks.items()},
+            "range_networks": {p: net.state_dict() for p, net in self._range_networks.items()},
         }
         torch.save(state, path)
 
@@ -272,33 +307,56 @@ class DeepCFR:
             seed=seed,
             external_sampling=cfg["external_sampling"],
             parallel_traversals=cfg["parallel_traversals"],
+            range_net=cfg.get("range_net", False),
         )
         solver._strategy_sum = state["strategy_sum"]
         for player, state_dict in state["networks"].items():
-            net = PokerGNN(cfg["node_feature_dim"], cfg["hidden_dim"])
-            net.load_state_dict(state_dict)
-            solver._networks[player] = net
-            solver._optimizers[player] = torch.optim.Adam(net.parameters(), lr=cfg["lr"])
+            solver._network(player).load_state_dict(state_dict)
         for player, state_dict in state["policy_networks"].items():
-            net = PokerGNN(cfg["node_feature_dim"], cfg["hidden_dim"])
-            net.load_state_dict(state_dict)
-            solver._policy_networks[player] = net
-            solver._policy_optimizers[player] = torch.optim.Adam(net.parameters(), lr=cfg["lr"])
+            solver._policy_network(player).load_state_dict(state_dict)
+        for player, state_dict in state.get("range_networks", {}).items():
+            solver._range_network(player).load_state_dict(state_dict)
         return solver
 
     def _network(self, player: int) -> PokerGNN:
         if player not in self._networks:
-            net = PokerGNN(self.encoder.node_feature_dim, self.hidden_dim)
+            net = PokerGNN(self.encoder.node_feature_dim, self.hidden_dim, self._extra_dim)
             self._networks[player] = net
             self._optimizers[player] = torch.optim.Adam(net.parameters(), lr=self.lr)
         return self._networks[player]
 
     def _policy_network(self, player: int) -> PokerGNN:
         if player not in self._policy_networks:
-            net = PokerGNN(self.encoder.node_feature_dim, self.hidden_dim)
+            net = PokerGNN(self.encoder.node_feature_dim, self.hidden_dim, self._extra_dim)
             self._policy_networks[player] = net
             self._policy_optimizers[player] = torch.optim.Adam(net.parameters(), lr=self.lr)
         return self._policy_networks[player]
+
+    def _range_network(self, player: int) -> PokerGNN:
+        if player not in self._range_networks:
+            net = PokerGNN(self.encoder.node_feature_dim, self.hidden_dim, num_outputs=RANGE_OUTPUTS)
+            self._range_networks[player] = net
+            self._range_optimizers[player] = torch.optim.Adam(net.parameters(), lr=self.lr)
+        return self._range_networks[player]
+
+    def _range_features(self, player: int, batch):
+        """The range network's [equity, opponent strength] predictions for
+        `batch`, as extra inputs for `player`'s other networks. None when
+        range_net is off."""
+        if not self.range_net:
+            return None
+        net = self._range_network(player)
+        net.eval()
+        with torch.no_grad():
+            out, _ = net(batch)
+        return torch.sigmoid(out)
+
+    def estimate_range(self, game, state) -> dict[str, float]:
+        """The acting player's estimated showdown equity vs. the opponent's
+        range, and the opponent's estimated made-hand strength."""
+        batch = Batch.from_data_list([self.encoder.encode(game, state, state.player)])
+        equity, opp_strength = self._range_features(state.player, batch)[0].tolist()
+        return {"equity": equity, "opp_strength": opp_strength}
 
     def policy(self, game, state) -> dict[int, float]:
         """The strategy to actually play with: `average_strategy()`'s exact
@@ -306,23 +364,34 @@ class DeepCFR:
         to the trained strategy network elsewhere (only ever populated in
         `external_sampling` mode). Use this instead of `average_strategy()`
         for actual play on a game too big to have visited every infoset."""
-        player = state.player
-        legal = game.legal_actions(state)
-        sums = self._strategy_sum.get(state.infoset_key(player))
-        if sums is not None:
-            total = sum(sums.values())
-            if total > 0:
-                return {a: sums[a] / total for a in legal}
+        return self.policy_batch(game, [state])[0]
 
-        if player not in self._policy_networks:
-            return {a: 1.0 / len(legal) for a in legal}
-        data = self.encoder.encode(game, state, player)
-        net = self._policy_network(player)
-        net.eval()
-        with torch.no_grad():
-            logits, _ = net(Batch.from_data_list([data]))
-        probs = F.softmax(logits[0][list(legal)], dim=0)
-        return {a: p.item() for a, p in zip(legal, probs)}
+    def policy_batch(self, game, states) -> list[dict[int, float]]:
+        """`policy()` for many states at once, with a single batched
+        network forward pass per player for whichever of them miss the
+        exact dict (e.g. LBR querying every hand in an opponent range)."""
+        result: list = [None] * len(states)
+        misses: dict[int, list[int]] = {0: [], 1: []}
+        for i, state in enumerate(states):
+            legal = game.legal_actions(state)
+            sums = self._strategy_sum.get(state.infoset_key(state.player))
+            total = sum(sums.values()) if sums is not None else 0.0
+            if total > 0:
+                result[i] = {a: sums[a] / total for a in legal}
+            elif state.player in self._policy_networks:
+                misses[state.player].append(i)
+            else:
+                result[i] = {a: 1.0 / len(legal) for a in legal}
+        for player, idxs in misses.items():
+            if not idxs:
+                continue
+            probs = network_policy_batch(
+                self._policy_networks[player], self.encoder, game, [states[i] for i in idxs],
+                extra_fn=lambda b, p=player: self._range_features(p, b),
+            )
+            for i, p in zip(idxs, probs):
+                result[i] = p
+        return result
 
     def _predict_strategy(self, state, player: int) -> tuple[dict, object]:
         return self._strategy_cache[(player, state.infoset_key(player))]
@@ -359,6 +428,8 @@ class DeepCFR:
         player = state.player
         legal = game.legal_actions(state)
         data = self.encoder.encode(game, state, player)
+        if self.range_net:
+            self._remember_range(game, state, player, data)
         strategy = yield (player, data, legal)
 
         if player == traverser:
@@ -388,12 +459,21 @@ class DeepCFR:
         strategy-network training buffer -- same role as the `sums[action]
         += ...` line just above, except this one generalizes to infosets
         that never get visited again."""
-        target = torch.zeros(NUM_ACTIONS)
-        mask = torch.zeros(NUM_ACTIONS, dtype=torch.bool)
-        for action in legal:
-            target[action] = strategy[action]
-            mask[action] = True
-        self._policy_buffers[player].add((data, target, mask))
+        self._policy_buffers[player].add(policy_example(data, legal, strategy))
+
+    def _remember_range(self, game, state, player: int, data) -> None:
+        """Add one (infoset, what the opponent really held) example to the
+        range network's buffer. The targets use the opponent's actual cards,
+        which the network's input never contains."""
+        equity = game.sample_showdown_equity(state, player, self._rng)
+        if equity is None:
+            return
+        opp = 1 - player
+        opp_cards = tuple(c for c in (state.hole_cards[opp], state.hole_cards2[opp]) if c is not None)
+        strength = game.hand_strength(opp_cards, state.board)
+        target = torch.tensor([equity, strength if strength is not None else 0.0])
+        mask = torch.tensor([1.0, 1.0 if strength is not None else 0.0])
+        self._range_buffers[player].add((data, target, mask))
 
     def _run_batch(self, game, traversers: list[int]) -> None:
         """Drive `len(traversers)` `_traverse_sampled` generators concurrently
@@ -422,11 +502,12 @@ class DeepCFR:
                 group = [(idx, data, legal) for idx, p, data, legal in requests if p == player]
                 if not group:
                     continue
-                graphs = [data for _, data, _ in group]
+                batch = Batch.from_data_list([data for _, data, _ in group])
+                extra = self._range_features(player, batch)
                 net = self._network(player)
                 net.eval()
                 with torch.no_grad():
-                    advantages, _ = net(Batch.from_data_list(graphs))
+                    advantages, _ = net(batch, extra)
                 for (idx, _, legal), adv in zip(group, advantages):
                     positive = {a: max(adv[a].item(), 0.0) for a in legal}
                     total = sum(positive.values())
@@ -494,7 +575,7 @@ class DeepCFR:
             batch_items = buffer.sample(self.batch_size)
             graphs = Batch.from_data_list([g for g, _ in batch_items])
             targets = torch.stack([t for _, t in batch_items])
-            predicted, _ = net(graphs)
+            predicted, _ = net(graphs, self._range_features(player, graphs))
             loss = F.mse_loss(predicted, targets)
             optimizer.zero_grad()
             loss.backward()
@@ -506,18 +587,26 @@ class DeepCFR:
             return
         net = self._policy_network(player)
         optimizer = self._policy_optimizers[player]
+        for _ in range(self.train_steps_per_iteration):
+            fit_policy_step(
+                net, optimizer, buffer.sample(self.batch_size),
+                extra_fn=lambda b: self._range_features(player, b),
+            )
+
+    def _fit_range(self, player: int) -> None:
+        buffer = self._range_buffers[player]
+        if not self.range_net or not buffer:
+            return
+        net = self._range_network(player)
+        optimizer = self._range_optimizers[player]
         net.train()
         for _ in range(self.train_steps_per_iteration):
             batch_items = buffer.sample(self.batch_size)
             graphs = Batch.from_data_list([g for g, _, _ in batch_items])
             targets = torch.stack([t for _, t, _ in batch_items])
-            legal_masks = torch.stack([m for _, _, m in batch_items])
-            logits, _ = net(graphs)
-            # illegal actions get -inf logit so softmax puts ~0 mass there,
-            # matching the 0s already in `targets` at those positions
-            masked_logits = logits.masked_fill(~legal_masks, float("-inf"))
-            probs = F.softmax(masked_logits, dim=1)
-            loss = F.mse_loss(probs, targets)
+            masks = torch.stack([m for _, _, m in batch_items])
+            out, _ = net(graphs)
+            loss = ((torch.sigmoid(out) - targets) ** 2 * masks).sum() / masks.sum()
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()

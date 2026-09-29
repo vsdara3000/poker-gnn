@@ -36,7 +36,14 @@ def parse_args():
     parser.add_argument("--game", default="hulhe", help="kuhn, leduc, or hulhe")
     parser.add_argument("--solver", default="deep_cfr", choices=list(LOADERS))
     parser.add_argument("--load", required=True, help="path a scripts/train.py --save run wrote")
-    parser.add_argument("--eval-hands", type=int, default=2000, help="simulated hands per baseline matchup")
+    parser.add_argument("--eval-hands", type=int, default=2000, help="deals per baseline matchup (each played once from each seat)")
+    parser.add_argument("--lbr-hands", type=int, default=0, help="hulhe only: deals for a local-best-response exploitability bound (slow; 0 = off)")
+    parser.add_argument(
+        "--distill",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="mccfr on hulhe: fit a strategy net to the average-strategy dict before evaluating, instead of a uniform-random fallback",
+    )
     parser.add_argument("--seed", type=int, default=0)
     return parser.parse_args()
 
@@ -48,7 +55,7 @@ def main():
     rng = random.Random(args.seed)
 
     print(f"loaded {args.solver} from {args.load}")
-    report_solver(game, args.game, solver, rng, args.eval_hands)
+    report_solver(game, args.game, solver, rng, args.eval_hands, args.lbr_hands, args.distill)
 
 
 if __name__ == "__main__":

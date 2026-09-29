@@ -43,6 +43,12 @@ class ExternalSamplingCFR:
     def average_strategy(self) -> dict:
         return {key: node.average_strategy() for key, node in self._nodes.items()}
 
+    def visit_counts(self) -> dict[str, float]:
+        """Per-infoset number of times its strategy was accumulated -- how
+        much to trust `average_strategy()` there (a once-visited infoset's
+        "average" is just one noisy current strategy)."""
+        return {key: sum(node.strategy_sum.values()) for key, node in self._nodes.items()}
+
     def save(self, path: str) -> None:
         """Persist the trained regret table. Doesn't preserve `_rng`'s exact
         state (`load` starts a fresh one) -- future sampling won't be

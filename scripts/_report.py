@@ -14,15 +14,17 @@ from __future__ import annotations
 import random
 
 from poker_gnn.eval.baseline_eval import (
-    average_payoff,
     call_policy,
+    evaluate_matchup,
     fold_policy,
     make_random_policy,
     make_solver_policy,
     make_strategy_policy,
 )
 from poker_gnn.eval.exploitability import exploitability
+from poker_gnn.eval.lbr import local_best_response
 from poker_gnn.solver.cfr import TabularCFR
+from poker_gnn.solver.distill import DistilledPolicy
 from poker_gnn.solver.mccfr import ExternalSamplingCFR
 
 SMALL_GAMES = {"kuhn", "leduc"}
@@ -40,21 +42,58 @@ def can_enumerate(game_name: str, solver) -> bool:
     return not solver.external_sampling  # DeepCFR, full-width mode
 
 
-def report_solver(game, game_name: str, solver, rng: random.Random, eval_hands: int = 2000) -> None:
+def playable_strategy(game, solver, rng: random.Random, distill: bool = True):
+    """Something with `policy(game, state)` to evaluate. DeepCFR already has
+    a network fallback. A dict-only solver gets one fit post hoc
+    (`DistilledPolicy`) unless `distill=False`, in which case it keeps the
+    old uniform-random fallback (returns None; callers use the dict)."""
+    if not isinstance(solver, DICT_ONLY_SOLVERS):
+        return solver
+    if not distill:
+        return None
+    visits = solver.visit_counts() if hasattr(solver, "visit_counts") else None
+    distilled = DistilledPolicy.fit(game, solver.average_strategy(), rng, visits=visits)
+    print(f"    distilled strategy net from {distilled.num_examples} examples")
+    return distilled
+
+
+def report_solver(
+    game,
+    game_name: str,
+    solver,
+    rng: random.Random,
+    eval_hands: int = 2000,
+    lbr_hands: int = 0,
+    distill: bool = True,
+) -> None:
     """Print exploitability (small games) or baseline-eval chip EV (HULHE,
-    or a large-scale solver on any game) for the given trained solver."""
+    or a large-scale solver on any game) for the given trained solver, plus
+    an LBR exploitability lower bound on HULHE if `lbr_hands` > 0."""
     if can_enumerate(game_name, solver):
         exp = exploitability(game, solver.average_strategy())
         print(f"    exploitability={exp:.6f}")
         return
 
-    if isinstance(solver, DICT_ONLY_SOLVERS):
+    strategy = playable_strategy(game, solver, rng, distill)
+    if strategy is None:
         policy = make_strategy_policy(solver.average_strategy(), rng)
     else:
-        policy = make_solver_policy(solver, rng)
+        policy = make_solver_policy(strategy, rng)
 
+    # +- is a 95% confidence half-width (1.96 standard errors).
     baselines = {"fold": fold_policy, "call": call_policy, "random": make_random_policy(rng)}
     for name, opponent in baselines.items():
-        p0, _ = average_payoff(game, {0: policy, 1: opponent}, eval_hands, rng)
-        _, p1 = average_payoff(game, {0: opponent, 1: policy}, eval_hands, rng)
-        print(f"    vs_{name}: P0={p0:+.3f}  P1={p1:+.3f}")
+        r = evaluate_matchup(game, policy, opponent, eval_hands, rng)
+        print(
+            f"    vs_{name}: P0={r.as_p0:+.3f}±{1.96 * r.as_p0_se:.3f}  "
+            f"P1={r.as_p1:+.3f}±{1.96 * r.as_p1_se:.3f}  "
+            f"dup={r.duplicate:+.3f}±{1.96 * r.duplicate_se:.3f}"
+        )
+
+    if lbr_hands > 0 and game_name == "hulhe" and strategy is not None:
+        r = local_best_response(game, strategy, lbr_hands, rng)
+        print(
+            f"    lbr (exploitability lower bound, chips/hand): "
+            f"{r.duplicate:+.3f}±{1.96 * r.duplicate_se:.3f}  "
+            f"(LBR as P0 {r.as_p0:+.3f}, as P1 {r.as_p1:+.3f})"
+        )

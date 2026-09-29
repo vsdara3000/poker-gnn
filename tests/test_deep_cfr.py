@@ -148,3 +148,26 @@ def test_policy_falls_back_to_the_strategy_network_for_unvisited_infosets():
         # a real (if untrained) network prediction, not the uniform fallback
         if len(legal) > 1:
             assert len(set(round(p, 6) for p in probs.values())) > 1
+
+
+def test_range_net_learns_showdown_equity_from_infoset_alone():
+    # In Kuhn, showdown equity is fully determined by hero's own card:
+    # K always wins and J always loses. The range net only sees the
+    # infoset, so it must have learned this ordering from sampled deals.
+    from poker_gnn.games.base import Action
+
+    game = KuhnPoker()
+    solver = DeepCFR(seed=0, external_sampling=True, range_net=True, train_steps_per_iteration=8)
+    solver.train(game, 600)
+    root = game.root()
+    equities = {}
+    for card in range(3):
+        state = game.step(game.step(root, card), (card + 1) % 3)  # P0 holds `card`
+        equities[card] = solver.estimate_range(game, state)["equity"]
+    assert equities[0] < 0.25 < equities[1] < 0.75 < equities[2]
+    assert set(solver.policy(game, state)) == set(game.legal_actions(state))
+
+
+def test_range_net_requires_external_sampling():
+    with pytest.raises(ValueError):
+        DeepCFR(range_net=True)

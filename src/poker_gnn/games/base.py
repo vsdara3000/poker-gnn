@@ -102,6 +102,14 @@ class Game(ABC):
         game doesn't define one)."""
         return None
 
+    def sample_showdown_equity(self, state: State, player: int, rng) -> float | None:
+        """One unbiased sample of `player`'s showdown result against the
+        opponent's *actual* hole cards (1 win, 0.5 split, 0 loss), dealing
+        any missing board cards at random from `rng`. Uses information
+        `player` can't see, so it's only for training targets (DeepCFR's
+        range network), never for play. None if the game doesn't define it."""
+        return None
+
     def is_terminal(self, state: State) -> bool:
         return state.terminal
 

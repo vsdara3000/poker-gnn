@@ -101,3 +101,18 @@ def test_deep_cfr_save_load_preserves_config(trained_deep_cfr, tmp_path):
 
     # a loaded solver can keep training, not just be read from
     loaded.train(game, 20)
+
+
+def test_deep_cfr_with_range_net_round_trips(tmp_path):
+    game = KuhnPoker()
+    solver = DeepCFR(seed=0, external_sampling=True, parallel_traversals=4, range_net=True)
+    solver.train(game, 40)
+    path = os.path.join(tmp_path, "deep_cfr_range.pt")
+    solver.save(path)
+    loaded = DeepCFR.load(path)
+    assert loaded.range_net
+    for state in _all_decision_states(game):
+        assert loaded.estimate_range(game, state) == pytest.approx(solver.estimate_range(game, state))
+        before, after = solver.policy(game, state), loaded.policy(game, state)
+        assert after == pytest.approx(before, abs=1e-6)
+    loaded.train(game, 8)

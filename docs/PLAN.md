@@ -1,6 +1,6 @@
 # Poker GNN solver — plan
 
-**Current focus: Kuhn only.** Do not implement Leduc or HULHE until Kuhn is solved both tabularly and with the GNN.
+**Current focus: HULHE (phase 3).** Kuhn and Leduc are done (tabular CFR at Nash, GNN/Deep CFR trained on top). See Phase 3 status below.
 
 ## Difficulty ladder
 
@@ -95,12 +95,18 @@ Infrastructure done since, without a long run (from a "what can we do that doesn
 - Cached `card_graph()` -- it was rebuilding the identical 52-node graph from scratch on every single infoset encoding, ~44% of total HULHE training time by profile (card_graph depends only on `num_cards`/`num_suits`, never per-instance state). Cut a 100-iteration HULHE training run's total function calls from 134.8M to 32.0M (profiled before/after, same config) -- a genuine ~2x reduction in work, not noise.
 - `save()`/`load()` on all three solvers (`TabularCFR` pickles `_nodes` directly -- despite `__slots__`, no custom serialization needed; `ExternalSamplingCFR` the same; `DeepCFR` uses `torch.save` for network state_dicts + the exact `_strategy_sum` dict, skipping reservoir buffers/optimizer momentum as a deliberate, documented simplification). Means a training run is no longer throwaway -- it can be evaluated or resumed later without re-solving from scratch. `scripts/solve_tabular.py` and `scripts/train.py` both gained `--save PATH`; `scripts/evaluate.py` (previously a stub) now loads a saved solver via `--load PATH` and reports on it, reusing `scripts/_report.py` (factored out of `train.py` to avoid duplicating the exploitability-vs-baseline-eval reporting logic). Found and fixed a real bug in that shared reporting code while wiring this up: it assumed any non-`ExternalSamplingCFR` solver was a `DeepCFR` with an `external_sampling` attribute, which crashed the instant a loaded `TabularCFR` hit it. All three solver types verified round-tripping correctly (`tests/test_solver_persistence.py`, plus an end-to-end CLI smoke test of all three via `train.py --save` + `evaluate.py --load`).
 
+Evaluation and ranging upgrades (done, before the first long run):
+
+- **Duplicate evaluation with error bars.** `baseline_eval.evaluate_matchup` plays every deal twice with identical cards, hero once in each seat, and reports per-seat and duplicate (seat-averaged) EV with standard errors. `scripts/_report.py` prints `P0`/`P1`/`dup` as mean ± 95% CI. On a short HULHE smoke run at 200 deals the per-seat vs_call CI was about ±1 chip, and duplicate dealing brought it to ±0.4. **Caveat on everything recorded above:** those runs used 200 hands per matchup with no error bars, so per-seat differences under about 1 chip (for example "vs_call +0.638 / +0.036", or "bigger config modestly better") are within noise. The large gaps (deep_cfr crushing random, mccfr's dict coverage) likely hold, but should be re-measured.
+- **mccfr strategy network (`solver/distill.py`, `DistilledPolicy`).** After training, it plays self-play hands with mccfr's dict, fits a strategy net to (infoset, average strategy) at covered decisions (optionally only ones visited at least `min_visits` times), and uses dict-then-network lookup like `DeepCFR.policy()`. `_report` does this automatically for mccfr on HULHE (`--no-distill` restores the old uniform fallback), so mccfr vs. deep_cfr is now like-for-like. Shared helpers live in `solver/policy_net.py`.
+- **Local Best Response (`eval/lbr.py`).** Implements Lisý & Bowling 2017 for HULHE: a Bayes-updated sampled opponent range (`range_size` combos), rollout equity, and a greedy one-step fold/call/raise choice. Its winnings are an estimated *lower bound* on exploitability. It's loose, but it adapts to the strategy it plays against, unlike the fixed baselines. `--lbr-hands N` on train/evaluate turns it on. First smoke numbers (tiny runs, 20 deals, meaningless beyond "it runs"): mccfr 3k iterations +6.1±2.0, deep_cfr 64 iterations +13.9±3.5 chips/hand.
+- **Learned opponent ranging (`DeepCFR(range_net=True)`, `--range-net`).** This is the belief-state idea previously deferred, done as a learned model instead of a per-node Bayesian update. Sampled traversal knows the opponent's real cards, so a third network per player learns to predict the acting player's showdown equity against the opponent's actual hand (`Game.sample_showdown_equity`) and the opponent's made-hand strength, from the hero's infoset alone. That forces it to read the opponent's betting. Its sigmoid outputs are fed into the advantage and strategy nets as extra per-graph features (`PokerGNN(extra_dim=...)`). Validated on Kuhn (it learns J < Q < K equity) and with a save/load round trip; smoke-tested on HULHE. **Not yet shown to help**; that needs an A/B run with multiple seeds.
+
 Other not done yet:
 
-- No coverage-generalizing wrapper for `mccfr`'s average strategy (see takeaway above) -- would let `mccfr` vs. `deep_cfr` be compared on equal footing instead of the dict-coverage gap dominating the numbers.
-- No exploitability trend or a "done when" call for phase 3 -- only baseline-eval numbers so far, and only at small iteration counts.
-- No multi-seed hyperparameter comparison yet for the "bigger" Deep CFR config vs. default -- `scripts/train.py` now makes this easy to script, just hasn't been run.
-- No real long training run yet with the card_graph caching speedup in place -- the last real HULHE numbers (previous section) predate it.
+- No exploitability trend or a "done when" call for phase 3. LBR now exists, so the proposed bar is: LBR lower bound trending down across checkpoints, and deep_cfr's LBR clearly below a trivial strategy's, such as always-call's (not yet measured at a meaningful sample size).
+- No multi-seed comparisons yet: default vs. "bigger" config, and range net on vs. off.
+- No real long training run yet with the card_graph caching speedup in place.
 
 ## Shared pieces (keep game-agnostic)
 
