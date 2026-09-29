@@ -22,11 +22,16 @@ python scripts/train.py --game hulhe --solver mccfr --iterations 20000
 python scripts/train.py --game hulhe --solver deep_cfr --iterations 5000 --save checkpoints/hulhe.pt
 python scripts/evaluate.py --game hulhe --solver deep_cfr --load checkpoints/hulhe.pt
 
+# Several configs x seeds in parallel (one process per run), with a summary table
+python scripts/sweep.py --variants deep deep_range --seeds 0 1 2 --iterations 3000 --lbr-hands 200
+
 # Play a hand of Kuhn by hand, for poking at the rules
 PYTHONPATH=src python3 scripts/play_kuhn.py
 ```
 
 `scripts/train.py`/`evaluate.py` report exact exploitability for kuhn/leduc and baseline-eval chip EV (vs. fold/call/random) for hulhe. All three solvers (`TabularCFR`, `ExternalSamplingCFR`, `DeepCFR`) support `save()`/`load()`, so a training run's result isn't throwaway -- it can be evaluated or resumed later without re-solving from scratch.
+
+On WSL, keep the repo on the Linux filesystem (e.g. `~/poker-gnn`), not under `/mnt/c`. Reading Windows files from WSL made each run's startup about 7x slower (48s vs. 7s).
 
 ## Layout
 
