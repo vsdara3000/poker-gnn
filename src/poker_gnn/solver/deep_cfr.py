@@ -13,11 +13,13 @@ Two traversal modes, chosen by `external_sampling`:
   standing in for the regret table -- only the traverser's own decisions
   branch over every action; the opponent and chance are each sampled once.
   Nothing can be enumerated up front (HULHE's ~10^14 infosets rule that
-  out). To still get batched (and GPU-worthy) network calls despite that,
+  out). To still get batched network calls despite that,
   `parallel_traversals` sampled traversals run concurrently as generators
   (`_traverse_sampled`): each pauses at every network query, `_run_batch`
   collects every paused traversal's pending query, does one batched
   forward pass per player, and resumes them all with their strategies.
+  (On CPU; the bottleneck is Python-side orchestration, not matmuls --
+  see docs/PLAN.md.)
 
 Either way, per player, an advantage network regresses the instantaneous
 counterfactual regret observed at each visited infoset; regret matching
@@ -34,7 +36,8 @@ at Kuhn/Leduc scale (the dict ends up covering the whole game) but breaks
 down at HULHE's scale (~10^14 infosets, a few hundred thousand visited
 after a real training run -- a vanishing fraction). `policy()` looks the
 dict up first and falls back to this strategy network -- trained to
-imitate the sampled `strategy` seen at every infoset visited, same as
+imitate the current `strategy` seen at every opponent-side infoset visit
+(the same visits that feed the dict), same as
 Brown et al.'s original Deep CFR -- everywhere else, so a strategy built
 from this training run actually generalizes past the exact infosets it
 visited, rather than silently defaulting to uniform random outside them
@@ -76,7 +79,11 @@ RANGE_OUTPUTS = 2
 
 
 class _ReservoirBuffer:
-    """Fixed-capacity reservoir sample of (graph, target_regrets) pairs."""
+    """Fixed-capacity uniform sample over every item ever added (Vitter's
+    algorithm R), so old iterations stay represented in proportion instead
+    of being pushed out by recent ones. Items are (graph, target_regrets)
+    for advantage buffers, policy_net.policy_example triples for strategy
+    buffers, and (graph, target, mask) for range buffers."""
 
     def __init__(self, capacity: int, rng: random.Random):
         self.capacity = capacity
@@ -89,6 +96,8 @@ class _ReservoirBuffer:
         if len(self.items) < self.capacity:
             self.items.append(item)
         else:
+            # Keep the new item with probability capacity / seen, replacing
+            # a uniformly chosen slot.
             j = self._rng.randint(0, self._seen - 1)
             if j < self.capacity:
                 self.items[j] = item
@@ -122,7 +131,8 @@ class DeepCFR:
         if range_net and not external_sampling:
             raise ValueError("range_net needs external_sampling=True (it learns from sampled deals)")
         if limit_threads:
-            # Kuhn/Leduc-sized graphs are a handful to a couple dozen nodes;
+            # Kuhn/Leduc graphs are a handful to a couple dozen nodes, and
+            # even HULHE's are just 52 card nodes plus the betting path;
             # torch's intra-op thread pool spends far more time coordinating
             # than computing, so single-threaded is an order of magnitude
             # faster here.
@@ -183,6 +193,12 @@ class DeepCFR:
         self._strategy_cache: dict[tuple[int, str], tuple[dict, object]] = {}
 
     def train(self, game, iterations: int):
+        """Run `iterations` CFR iterations, refitting the networks as it goes.
+
+        Sampling mode counts one traversal as one iteration, runs them in
+        batches of `parallel_traversals` (traverser alternating), and refits
+        after each batch. Full-width mode refits both players' advantage
+        networks after every full tree pass. Returns self for chaining."""
         if self.external_sampling:
             remaining = iterations
             traverser_counter = 0
@@ -258,6 +274,8 @@ class DeepCFR:
         return cache
 
     def average_strategy(self) -> dict:
+        """Exact normalized `_strategy_sum`, {infoset_key: {action: prob}};
+        covers only infosets visited during training (see `policy()`)."""
         result = {}
         for key, sums in self._strategy_sum.items():
             total = sum(sums.values())
@@ -353,7 +371,8 @@ class DeepCFR:
 
     def estimate_range(self, game, state) -> dict[str, float]:
         """The acting player's estimated showdown equity vs. the opponent's
-        range, and the opponent's estimated made-hand strength."""
+        range, and the opponent's estimated made-hand strength. Requires
+        range_net=True."""
         batch = Batch.from_data_list([self.encoder.encode(game, state, state.player)])
         equity, opp_strength = self._range_features(state.player, batch)[0].tolist()
         return {"equity": equity, "opp_strength": opp_strength}
@@ -397,6 +416,7 @@ class DeepCFR:
         return self._strategy_cache[(player, state.infoset_key(player))]
 
     def _sample(self, outcomes):
+        """Draw one item from a sequence of (item, probability) pairs."""
         items = [item for item, _ in outcomes]
         weights = [weight for _, weight in outcomes]
         return self._rng.choices(items, weights=weights, k=1)[0]
@@ -430,6 +450,7 @@ class DeepCFR:
         data = self.encoder.encode(game, state, player)
         if self.range_net:
             self._remember_range(game, state, player, data)
+        # Pause here; `_run_batch` answers with the regret-matched strategy.
         strategy = yield (player, data, legal)
 
         if player == traverser:
@@ -439,6 +460,8 @@ class DeepCFR:
                 v = yield from self._traverse_sampled(game, game.step(state, action), traverser)
                 action_values[action] = v
                 node_value += strategy[action] * v
+            # Sampled regret, unweighted (see mccfr.py). Illegal actions
+            # keep a 0 target and are never read back.
             target = torch.zeros(NUM_ACTIONS)
             for action in legal:
                 target[action] = action_values[action] - node_value
@@ -508,6 +531,7 @@ class DeepCFR:
                 net.eval()
                 with torch.no_grad():
                     advantages, _ = net(batch, extra)
+                # Regret matching over the predicted advantages.
                 for (idx, _, legal), adv in zip(group, advantages):
                     positive = {a: max(adv[a].item(), 0.0) for a in legal}
                     total = sum(positive.values())
@@ -518,6 +542,9 @@ class DeepCFR:
                     to_send[idx] = strategy
 
     def _traverse(self, game, state, reach0: float, reach1: float) -> tuple[float, float]:
+        """Full-width CFR pass, the same recursion as `TabularCFR._cfr`, but
+        the strategy comes from `_strategy_cache` and the opponent-reach-
+        weighted regrets go into the advantage buffer instead of a table."""
         if state.terminal:
             return game.returns(state)
 
@@ -565,6 +592,15 @@ class DeepCFR:
         return (node_value0, node_value1)
 
     def _fit(self, player: int) -> None:
+        """A few MSE steps of the advantage network on its reservoir.
+
+        Targets are per-visit (instantaneous) regrets, not cumulative ones.
+        Since the reservoir is a uniform sample over all iterations, the
+        regression converges to their per-infoset mean, which is
+        proportional to cumulative regret; regret matching is scale-
+        invariant, so that gives the same strategy. Unlike Brown et al.,
+        there is no linear-CFR iteration weighting, and the network is
+        warm-started rather than retrained from scratch each iteration."""
         buffer = self._buffers[player]
         if not buffer:
             return
@@ -582,6 +618,8 @@ class DeepCFR:
             optimizer.step()
 
     def _fit_policy(self, player: int) -> None:
+        """A few steps of the strategy network toward the buffered strategies
+        (their mean per infoset is the average strategy)."""
         buffer = self._policy_buffers[player]
         if not buffer:
             return
@@ -594,6 +632,8 @@ class DeepCFR:
             )
 
     def _fit_range(self, player: int) -> None:
+        """A few MSE steps of the range network on sigmoid outputs; the mask
+        drops the opponent-strength target where `hand_strength` is None."""
         buffer = self._range_buffers[player]
         if not self.range_net or not buffer:
             return

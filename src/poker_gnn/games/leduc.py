@@ -1,13 +1,18 @@
-"""Leduc poker — phase 2 (after Kuhn CFR + GNN work).
+"""Leduc poker: the mid-size game (phase 2 of docs/PLAN.md).
+
+Adds what Kuhn lacks -- a second betting round, a public board card, pairs,
+raises -- while staying small enough (936 information sets) for exact
+full-width CFR and exact exploitability. The step between hand-checkable
+Kuhn and HULHE, where nothing can be enumerated.
 
 6 cards (J, Q, K x 2 suits, ids 0-5, rank = card // 2), 2 betting rounds, 2
 players. Each player antes 1, is dealt one private card, and there is a
 public board card revealed between rounds.
 
 Betting: round 0 (preflop) bet size is 2, round 1 (postflop, after the board
-card) bet size is 4. Betting only ever uses check/call or bet/raise (no
-re-raising past a fixed cap): at most 2 bet/raise actions per round. Player 0
-acts first in both rounds. Showdown: pairing the board beats everything
+card) bet size is 4. At most 2 bet/raise actions per round (a bet and one
+raise); fold is only legal when facing a bet. Player 0 acts first in both
+rounds. Showdown: pairing the board beats everything
 else; otherwise higher rank hole card wins; equal, unpaired ranks split the
 pot.
 
@@ -32,7 +37,10 @@ STARTING_STACK = ANTE + BET_SIZES[0] * MAX_RAISES + BET_SIZES[1] * MAX_RAISES
 
 
 def _replay_round(local_history: tuple[int, ...], round_: int) -> tuple[list[int], int, int]:
-    """Replay the current round's action so far; return (contrib_per_player, level, raises)."""
+    """Replay the current round's actions so far; return (contrib_per_player,
+    level, raises). `contrib` and `level` count only this round's chips (the
+    level is what a player must have in to stay in), which is all
+    `legal_actions` and `step` need to price a call or raise."""
     bet_size = BET_SIZES[round_]
     contrib = [0, 0]
     level = 0
@@ -49,6 +57,8 @@ def _replay_round(local_history: tuple[int, ...], round_: int) -> tuple[list[int
 
 
 def _round_ends(local_history_before: tuple[int, ...], action: int, level_before: int) -> bool:
+    """Whether `action` closes the current betting round (fold is handled
+    separately by the caller)."""
     if action != Action.CHECK_CALL:
         return False
     if level_before > 0:
@@ -57,6 +67,8 @@ def _round_ends(local_history_before: tuple[int, ...], action: int, level_before
 
 
 class LeducPoker(Game):
+    """Two-player Leduc hold'em. Card ids 0-5 = Js Jh Qs Qh Ks Kh."""
+
     name = "leduc"
 
     def root(self) -> State:

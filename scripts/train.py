@@ -2,10 +2,11 @@
 
 Small games (kuhn, leduc) can be enumerated exactly, so checkpoints there
 report exact exploitability. HULHE can't be enumerated (~10^14 infosets), so
-checkpoints report baseline-eval chip EV against fixed opponents (always
-fold / always call / uniform random) instead -- see
+checkpoints report duplicate baseline-eval chip EV against fixed opponents
+(check/fold / always call / uniform random) instead -- see
 `poker_gnn.eval.baseline_eval` for why that's a weaker signal than
-exploitability.
+exploitability -- and, with --lbr-hands N, an LBR exploitability lower
+bound. Reporting is shared with scripts/evaluate.py via `_report.py`.
 
 Examples:
   python scripts/train.py --game kuhn --solver deep_cfr --iterations 2000
@@ -68,6 +69,8 @@ def parse_args():
 
 
 def make_solver(args):
+    """Build the solver from CLI args. External sampling defaults to on
+    exactly for games too big to enumerate."""
     if args.solver == "mccfr":
         return ExternalSamplingCFR(seed=args.seed)
 
@@ -88,6 +91,8 @@ def make_solver(args):
 
 
 def run_iterations(solver, game, chunk: int) -> None:
+    """Advance training by `chunk` iterations (the two solvers name this
+    method differently)."""
     if isinstance(solver, ExternalSamplingCFR):
         solver.iterate(game, chunk)
     else:

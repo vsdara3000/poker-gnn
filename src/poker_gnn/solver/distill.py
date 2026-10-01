@@ -25,6 +25,11 @@ from poker_gnn.solver.policy_net import fit_policy_step, network_policy_batch, p
 
 
 class DistilledPolicy:
+    """A trusted strategy dict plus one strategy network per player for
+    everything outside it. Build with `fit`; exposes the same
+    `policy`/`policy_batch` interface as `DeepCFR`, so `baseline_eval` and
+    `lbr` treat both alike."""
+
     def __init__(self, strategy: dict, networks: dict[int, PokerGNN], encoder: InfosetEncoder):
         self.strategy = strategy
         self.networks = networks
@@ -46,6 +51,15 @@ class DistilledPolicy:
         train_steps: int = 500,
         limit_threads: bool = True,
     ) -> "DistilledPolicy":
+        """Collect examples from `num_hands` self-play hands under `strategy`
+        and fit a network per player for `train_steps` steps.
+
+        Self-play (rather than iterating over the dict) weights examples by
+        how often the strategy actually reaches each infoset, which is the
+        distribution evaluation will see. Decisions outside the dict are
+        played uniformly at random, matching the old fallback. `visits` (from
+        `ExternalSamplingCFR.visit_counts`) with `min_visits` drops entries
+        whose average is too noisy to imitate."""
         if limit_threads:
             torch.set_num_threads(1)  # same reason as DeepCFR: tiny graphs
         encoder = InfosetEncoder()
@@ -90,9 +104,12 @@ class DistilledPolicy:
         return result
 
     def policy(self, game, state) -> dict[int, float]:
+        """{action: prob} at `state` for the acting player."""
         return self.policy_batch(game, [state])[0]
 
     def policy_batch(self, game, states) -> list[dict[int, float]]:
+        """`policy()` for many states, with one network pass per player for
+        the dict misses; uniform if that player has no network."""
         result: list = [None] * len(states)
         misses: dict[int, list[int]] = {0: [], 1: []}
         for i, state in enumerate(states):

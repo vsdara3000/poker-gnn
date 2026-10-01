@@ -1,9 +1,10 @@
-"""Heads-up limit hold'em — phase 3 (last).
+"""Heads-up limit hold'em (HULHE): the target game (phase 3 of docs/PLAN.md).
 
 52 cards, 2 hole cards each, 4 betting rounds (preflop / flop / turn /
 river), community board grows 0 -> 3 -> 4 -> 5. Small bet is 2 (preflop,
-flop), big bet is 4 (turn, river); standard limit cap of 4 bet/raise
-actions per round. Blinds: P0 (button) posts the small blind and acts
+flop), big bet is 4 (turn, river); cap of 4 bet/raise actions per round.
+Preflop the big blind does not count toward that cap, so preflop allows
+one more raise than standard limit rules (blind + 4 raises). Blinds: P0 (button) posts the small blind and acts
 first preflop; P1 (big blind) acts first in every later round -- the
 "big blind option" (P0 completes the blind, P1 still gets to check or
 raise before preflop can close) falls out of the same round-closing rule
@@ -11,11 +12,15 @@ Leduc uses, generalized to a round that can *start* with a nonzero level
 (see `_round_ends`).
 
 Huge game tree (~10^14 information sets): unlike Kuhn/Leduc, nothing here
-can be enumerated exhaustively. `chance_outcomes` only ever needs to
-enumerate the *current* chance node's own outcomes (at most 52 remaining
-cards), never the whole tree, so it stays cheap -- but `TabularCFR` /
-`DeepCFR`'s full-width traversal, and `eval/exploitability`'s exact best
-response, both need a sampling-based replacement before they can run here.
+can be enumerated exhaustively. `chance_outcomes` only ever enumerates the
+*current* chance node's outcomes (at most 52 remaining cards), so it stays
+cheap, but full-width traversal and exact best response cannot run here.
+HULHE is trained with sampling instead (`solver/mccfr.py`, `DeepCFR(
+external_sampling=True)`) and evaluated with `eval/baseline_eval.py` and
+`eval/lbr.py` in place of `eval/exploitability.py`.
+
+Dealing order is P0's two hole cards, then P1's, then the board one card
+at a time; each card is its own chance node.
 """
 
 from __future__ import annotations
@@ -26,10 +31,11 @@ from poker_gnn.utils.cards import STRAIGHT_FLUSH, deck_card_names, evaluate_hand
 SMALL_BLIND = 1
 BIG_BLIND = 2
 BET_SIZES = (2, 2, 4, 4)  # preflop, flop, turn, river
-MAX_RAISES = 4  # standard limit cap: bet + 3 raises
+MAX_RAISES = 4  # bet + 3 raises postflop; preflop it is 4 raises on top of the big blind
 BOARD_TARGET_LEN = {1: 3, 2: 4, 3: 5}  # community cards once round `r` begins
-# max a player can ever contribute: preflop (blind + capped raises) plus
-# flop/turn/river each capped at their own bet size
+# max a player can ever contribute: preflop (big blind + 4 raises) plus
+# flop/turn/river at 4 bets each. Stacks are sized so a player can never
+# run out of chips, so there is no all-in logic.
 STARTING_STACK = (
     BIG_BLIND
     + MAX_RAISES * BET_SIZES[0]
@@ -55,6 +61,9 @@ def _round_opening(round_: int) -> tuple[list[int], int]:
 
 
 def _replay_round(local_history: tuple[int, ...], round_: int) -> tuple[list[int], int, int]:
+    """Replay the current round's actions; return (contrib_per_player, level,
+    raises), counting this round's chips only (preflop includes the blinds).
+    `raises` counts voluntary bets/raises, not the blinds."""
     bet_size = BET_SIZES[round_]
     contrib, level = _round_opening(round_)
     raises = 0
@@ -71,6 +80,8 @@ def _replay_round(local_history: tuple[int, ...], round_: int) -> tuple[list[int
 
 
 def _round_ends(raises_before: int, local_history_before: tuple[int, ...], action: int) -> bool:
+    """Whether `action` closes the current betting round (fold is handled
+    separately by the caller)."""
     if action != Action.CHECK_CALL:
         return False
     if raises_before > 0:
@@ -82,6 +93,9 @@ def _round_ends(raises_before: int, local_history_before: tuple[int, ...], actio
 
 
 class HeadsUpLimitHoldem(Game):
+    """Two-player limit hold'em. Card ids follow `utils/cards.py` (rank =
+    id // 4). P0 is the button/small blind."""
+
     name = "hulhe"
 
     def root(self) -> State:
@@ -114,6 +128,7 @@ class HeadsUpLimitHoldem(Game):
         return tuple(actions)
 
     def _remaining_cards(self, state: State) -> list[int]:
+        """Card ids not yet dealt to either player or the board."""
         dealt = set(state.board)
         dealt.update(c for c in state.hole_cards if c is not None)
         dealt.update(c for c in state.hole_cards2 if c is not None)
@@ -334,6 +349,8 @@ class HeadsUpLimitHoldem(Game):
         return 4
 
     def hand_strength(self, hole_cards: tuple[int, ...], board: tuple[int, ...]) -> float | None:
+        """Made-hand category (high card .. straight flush) scaled to [0, 1].
+        Coarse on purpose: ignores kickers and draws, it is only a hint."""
         cards = [*hole_cards, *board]
         if len(cards) < 5:
             return None  # preflop: no made-hand ranking exists yet

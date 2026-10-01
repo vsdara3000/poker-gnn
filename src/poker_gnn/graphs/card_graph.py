@@ -1,10 +1,15 @@
-"""Card relation graph (rank / suit / board links).
+"""Card relation graph: static structure over the whole deck.
 
 One node per card id. Card `i` has rank `i // game.num_suits()` (Kuhn: 1 suit,
 so every card is its own rank; Leduc: 2 suits, so ranks come in pairs). Two
 edge types: a hand-strength chain between adjacent ranks (every card in rank
 r <-> every card in rank r+1), and same-rank "pair" edges between cards that
 share a rank (a no-op for Kuhn, where no rank has more than one card).
+
+There are no suit edges and no ace-to-two (wheel) link, so flushes and
+wheel straights are not visible in the structure; HULHE gets that from
+`Game.hand_strength` instead. Which cards are the hero's or on the board is
+per-infoset and is flagged in `infoset_graph`, not here.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ def card_graph(game):
 
 @lru_cache(maxsize=None)
 def _card_graph_cached(n: int, num_suits: int):
+    # The returned tensors are shared across calls; callers must not modify them.
     num_ranks = n // num_suits
     ranks = [i // num_suits for i in range(n)]
 

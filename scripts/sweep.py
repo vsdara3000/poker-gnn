@@ -61,6 +61,8 @@ def parse_args():
 
 
 def run_one(args, variant: str, seed: int) -> tuple[str, int, float]:
+    """Run one train.py subprocess, logging to its own file. Returns
+    (name, exit code, seconds); finished runs are skipped with code 0."""
     name = f"{variant}_s{seed}"
     log_path = os.path.join(args.out, f"{name}.log")
     save_path = os.path.join(args.out, f"{name}.pt")
@@ -90,7 +92,8 @@ def run_one(args, variant: str, seed: int) -> tuple[str, int, float]:
 
 
 def final_metrics(log_path: str) -> dict[str, float]:
-    """Duplicate EV per baseline (and LBR) at the log's last checkpoint."""
+    """Duplicate EV per baseline (and LBR) at the log's last checkpoint,
+    parsed from `_report`'s printed lines (reset at each `iterations=`)."""
     metrics: dict[str, float] = {}
     with open(log_path) as f:
         for line in f:

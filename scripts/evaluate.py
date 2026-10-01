@@ -1,12 +1,14 @@
-"""Load a solver saved by scripts/train.py (--save) and report on it,
-without re-solving from scratch.
+"""Load a solver saved with --save (by scripts/train.py, or
+scripts/solve_tabular.py for `cfr`) and report on it, without re-solving
+from scratch.
 
-Reports exact exploitability for kuhn/leduc (full-width solvers), or
-baseline-eval chip EV against fixed opponents (fold/call/random) otherwise
--- see `poker_gnn.eval.baseline_eval` for why that's a weaker signal than
-exploitability. Loading is solver-type-specific (`TabularCFR`/`Deep
-CFR`/`ExternalSamplingCFR` all serialize differently), so `--solver` must
-match whatever `scripts/train.py --solver ...` produced the file.
+Reports exact exploitability for kuhn/leduc (except DeepCFR in
+external-sampling mode), or baseline-eval chip EV against fixed opponents
+(fold/call/random) otherwise -- see `poker_gnn.eval.baseline_eval` for why
+that's a weaker signal than exploitability -- plus an LBR bound on hulhe
+with --lbr-hands. Loading is solver-type-specific (`TabularCFR`/`DeepCFR`/
+`ExternalSamplingCFR` all serialize differently), so `--solver` must match
+the solver that wrote the file.
 
 Examples:
   python scripts/evaluate.py --game hulhe --solver deep_cfr --load checkpoints/hulhe.pt
@@ -35,7 +37,7 @@ def parse_args():
     )
     parser.add_argument("--game", default="hulhe", help="kuhn, leduc, or hulhe")
     parser.add_argument("--solver", default="deep_cfr", choices=list(LOADERS))
-    parser.add_argument("--load", required=True, help="path a scripts/train.py --save run wrote")
+    parser.add_argument("--load", required=True, help="solver file written by --save (train.py, or solve_tabular.py for --solver cfr)")
     parser.add_argument("--eval-hands", type=int, default=2000, help="deals per baseline matchup (each played once from each seat)")
     parser.add_argument("--lbr-hands", type=int, default=0, help="hulhe only: deals for a local-best-response exploitability bound (slow; 0 = off)")
     parser.add_argument(

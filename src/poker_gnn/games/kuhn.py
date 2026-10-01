@@ -1,6 +1,8 @@
-"""Kuhn poker — phase 1 (do this first).
+"""Kuhn poker: the smallest game in the repo (phase 1 of docs/PLAN.md).
 
-3 cards, 1 betting round, 2 players. Smallest game in the repo.
+3 cards, 1 betting round, 2 players, 12 information sets. Small enough to
+check by hand and has a known closed-form Nash equilibrium, so it is the
+sanity game every solver and the GNN pipeline are validated on first.
 
 Rules: deck {J, Q, K} (card ids 0, 1, 2), each player is dealt one card,
 each antes 1. Player 0 acts first and may check or bet 1; whichever player
@@ -13,6 +15,7 @@ from poker_gnn.games.base import Action, Player, Game, State
 STARTING_STACK = 2  # ante 1 + one bet/call of 1
 ANTE = 1
 
+# Kuhn's whole betting tree is five lines, so terminal detection is a lookup.
 _TERMINAL_HISTORIES = {
     (Action.CHECK_CALL, Action.CHECK_CALL),
     (Action.BET_RAISE, Action.FOLD),
@@ -23,6 +26,8 @@ _TERMINAL_HISTORIES = {
 
 
 class KuhnPoker(Game):
+    """Two-player Kuhn poker. Card ids 0, 1, 2 = J, Q, K."""
+
     name = "kuhn"
 
     def root(self) -> State:
@@ -96,6 +101,7 @@ class KuhnPoker(Game):
         stacks[actor] -= cost
         history = state.history + (action,)
         terminal = history in _TERMINAL_HISTORIES
+        # players strictly alternate starting with P0; terminal states park on P0
         next_player = Player.P0 if terminal else Player((len(history)) % 2)
 
         return State(
@@ -122,6 +128,7 @@ class KuhnPoker(Game):
             winner = 0 if state.hole_cards[0] > state.hole_cards[1] else 1
         loser = 1 - winner
 
+        # the winner nets exactly what the loser put in (ante + any bet/call)
         contributions = (
             STARTING_STACK - state.stacks[0],
             STARTING_STACK - state.stacks[1],
@@ -140,4 +147,5 @@ class KuhnPoker(Game):
         return 3
 
     def sample_showdown_equity(self, state: State, player: int, rng) -> float | None:
+        # no board and no ties in Kuhn, so this is deterministic and `rng` is unused
         return 1.0 if state.hole_cards[player] > state.hole_cards[1 - player] else 0.0

@@ -1,5 +1,9 @@
 """Card ids/ranks/suits and a 5-7 card poker hand evaluator, for HULHE.
 
+Used by `games/hulhe.py` (showdowns, `hand_strength`, equity rollouts) and
+`eval/lbr.py`. Brute force: scores every 5-card subset (at most C(7,5) = 21)
+and keeps the best, simple enough to verify by test.
+
 Card id convention matches `card_graph.py`'s generic `rank = card //
 num_suits`: card `i` has rank `i // 4` (0=Two ... 12=Ace) and suit `i % 4`
 (0=spades, 1=hearts, 2=diamonds, 3=clubs), so ranks come in contiguous
@@ -42,6 +46,7 @@ def card_name(card: int) -> str:
 
 
 def deck_card_names() -> tuple[str, ...]:
+    """Names for all 52 card ids in order, e.g. "2s", "2h", ..., "Ac"."""
     return tuple(card_name(c) for c in range(13 * NUM_SUITS))
 
 

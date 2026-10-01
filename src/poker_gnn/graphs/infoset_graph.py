@@ -3,14 +3,14 @@
 Conceptually heterogeneous — a card sub-graph glued to a betting sub-graph —
 but represented as a single homogeneous `torch_geometric.data.Data` whose
 node features carry a type flag, so one GNN can message-pass over both
-without PyG's HeteroData machinery. That's fine at Kuhn/Leduc scale; revisit
-for HULHE if the two node types need genuinely different conv weights.
+without PyG's HeteroData machinery. The same conv weights serve both node
+types; HeteroData is the fallback if they turn out to need separate ones.
 
 Never encodes the opponent's hole card(s): only `state.hole_cards[player]`
 and `state.hole_cards2[player]` (HULHE deals two; Kuhn/Leduc leave the
-latter None) are flagged "hero", and ranks in `state.board` are flagged
-"board" (empty in Kuhn, which has no board). Every other card node is
-indistinguishable info the GNN can't use to infer the opponent's hand.
+latter None) are flagged "hero", and cards in `state.board` are flagged
+"board" (empty in Kuhn, which has no board). Every other card node,
+including the opponent's, gets the same unflagged features.
 
 Two things exist here specifically so `PokerGNN` doesn't have to rediscover
 poker hand rankings from raw graph structure alone, which is a much bigger
@@ -34,10 +34,12 @@ from torch_geometric.data import Data
 from poker_gnn.graphs.betting_graph import ACTION_FEATURE_DIM, betting_graph
 from poker_gnn.graphs.card_graph import CARD_FEATURE_DIM, card_graph
 
+# Node feature layout, shared by card and action nodes (each zero-fills the other's slots):
 # [is_card_node, is_action_node, is_hero_card, is_board_card] + card features + action features
 NODE_TYPE_DIM = 4
 NODE_FEATURE_DIM = NODE_TYPE_DIM + CARD_FEATURE_DIM + ACTION_FEATURE_DIM
 
+# `data.node_role` values, used by PokerGNN's masked pooling
 ROLE_OTHER_CARD = 0
 ROLE_INFORMATIVE_CARD = 1
 ROLE_ACTION = 2
@@ -46,7 +48,8 @@ ROLE_ACTION = 2
 def infoset_graph(game, state, player: int) -> Data:
     """Encode what `player` sees: their own hole card(s), the public board
     card(s), and the public betting history, as one graph the GNN can
-    consume."""
+    consume. Card nodes come first (indices 0..num_cards-1, node index =
+    card id), then action nodes."""
     card_x, card_edges = card_graph(game)
     action_x, action_edges = betting_graph(state)
     num_cards = card_x.shape[0]
@@ -74,7 +77,7 @@ def infoset_graph(game, state, player: int) -> Data:
     edges = [(a, b) for a, b in card_edges.t().tolist()]
     offset = num_cards
     edges += [(a + offset, b + offset) for a, b in action_edges.t().tolist()]
-    # fuse every publicly-known card (hero's hole card(s), board cards) with
+    # connect every card the hero knows (own hole card(s), board cards) to
     # every betting node so the GNN can mix hand strength with the action
     # sequence
     known_cards = board_cards | hero_card_set

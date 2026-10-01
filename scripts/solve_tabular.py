@@ -1,5 +1,9 @@
 """Run tabular CFR on a small game and report exploitability + the average strategy.
 
+Full-width CFR and exact exploitability both walk the whole tree, so this is
+for kuhn and leduc only; use scripts/train.py for hulhe. On Kuhn the printed
+strategy should match the known Nash family and exploitability -> 0.
+
 Example: python scripts/solve_tabular.py --game kuhn --iterations 20000
 """
 
@@ -12,7 +16,7 @@ from poker_gnn.solver.cfr import TabularCFR
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--game", default="kuhn", help="kuhn, leduc, or hulhe")
+    parser.add_argument("--game", default="kuhn", help="kuhn or leduc (full-width CFR cannot finish on hulhe)")
     parser.add_argument("--iterations", type=int, default=20000)
     parser.add_argument("--checkpoints", type=int, default=10, help="progress prints during training")
     parser.add_argument("--save", help="path to persist the trained solver to when done")

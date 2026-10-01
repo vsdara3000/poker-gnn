@@ -23,15 +23,19 @@ Policy = Callable[[object, object], int]  # (game, state) -> action
 
 
 def fold_policy(game, state) -> int:
+    """Check/fold: folds to any bet, checks when checking is free."""
     legal = game.legal_actions(state)
     return Action.FOLD if Action.FOLD in legal else Action.CHECK_CALL
 
 
 def call_policy(game, state) -> int:
+    """Calling station: always checks or calls, never folds or raises."""
     return Action.CHECK_CALL
 
 
 def make_random_policy(rng: random.Random) -> Policy:
+    """Uniform random over legal actions."""
+
     def policy(game, state) -> int:
         return rng.choice(game.legal_actions(state))
 
@@ -61,8 +65,9 @@ def make_solver_policy(solver, rng: random.Random) -> Policy:
     """Samples from `solver.policy(game, state)` instead of a plain dict
     (`make_strategy_policy`). Use this for a solver exposing a hybrid
     exact-dict/network-fallback lookup (`DeepCFR.policy` in `external_
-    sampling` mode) so evaluation reflects what the network generalized
-    to, not just the infosets it happened to visit during training."""
+    sampling` mode, or `distill.DistilledPolicy`) so evaluation reflects
+    what the network generalized to, not just the infosets visited during
+    training."""
 
     def policy(game, state) -> int:
         legal = game.legal_actions(state)
@@ -106,6 +111,7 @@ def average_payoff(
 
 
 def _mean_and_stderr(samples: list[float]) -> tuple[float, float]:
+    """Sample mean and its standard error (NaN with fewer than 2 samples)."""
     n = len(samples)
     mean = sum(samples) / n
     if n < 2:

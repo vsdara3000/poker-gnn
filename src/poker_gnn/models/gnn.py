@@ -1,4 +1,9 @@
-"""Policy / value GNN over poker infoset graphs."""
+"""PokerGNN: the network behind every learned piece of Deep CFR.
+
+The same class backs Deep CFR's advantage, average-strategy and
+opponent-range networks, and the distilled MCCFR strategy network
+(`solver/distill.py`); only `num_outputs` and `extra_dim` differ.
+"""
 
 from __future__ import annotations
 
@@ -42,11 +47,17 @@ class PokerGNN(nn.Module):
         self.value_head = nn.Linear(pooled_dim, 1)
 
     def forward(self, batch, extra=None):
-        """Return (action_logits [B, num_outputs], value [B])."""
+        """Return (action_logits [B, num_outputs], value [B]) for a PyG batch
+        of B infoset graphs. Only the first output is trained by the current
+        solvers; the value head is unused.
+
+        Indexed by `Action` value (FOLD, CHECK_CALL, BET_RAISE), so callers
+        mask out illegal actions themselves."""
         x = F.relu(self.conv1(batch.x, batch.edge_index))
         x = F.relu(self.conv2(x, batch.edge_index))
 
         num_graphs = batch.num_graphs
+        # mean-pool each node role separately; `size=` keeps a row per graph
         card_mask = batch.node_role == ROLE_INFORMATIVE_CARD
         action_mask = batch.node_role == ROLE_ACTION
         card_pool = global_mean_pool(x[card_mask], batch.batch[card_mask], size=num_graphs)

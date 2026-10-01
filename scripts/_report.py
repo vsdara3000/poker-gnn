@@ -2,11 +2,13 @@
 
 Small games (kuhn, leduc) can be enumerated exactly, so this reports exact
 exploitability there. HULHE can't be enumerated (~10^14 infosets), so it
-reports baseline-eval chip EV against fixed opponents instead -- see
-`poker_gnn.eval.baseline_eval` for why that's a weaker signal than
-exploitability. Kept as CLI glue rather than part of the `poker_gnn` package
-itself, since it couples `eval` to a specific solver (`ExternalSamplingCFR`)
-purely for this reporting convenience.
+reports duplicate baseline-eval chip EV against fixed opponents instead --
+see `poker_gnn.eval.baseline_eval` for why that's a weaker signal than
+exploitability -- plus, optionally, an LBR exploitability lower bound.
+Dict-only solvers get a distilled strategy network first so they are
+evaluated like-for-like with DeepCFR. Kept as CLI glue rather than part of
+the `poker_gnn` package, since it couples `eval` to specific solver classes
+purely for this reporting convenience. Not run directly.
 """
 
 from __future__ import annotations
@@ -35,6 +37,8 @@ DICT_ONLY_SOLVERS = (TabularCFR, ExternalSamplingCFR)
 
 
 def can_enumerate(game_name: str, solver) -> bool:
+    """True if exact exploitability is affordable and meaningful: a small
+    game, and a solver whose average_strategy() dict covers it."""
     if game_name not in SMALL_GAMES:
         return False
     if isinstance(solver, DICT_ONLY_SOLVERS):

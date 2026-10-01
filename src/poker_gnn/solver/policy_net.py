@@ -45,7 +45,9 @@ def policy_example(data, legal, strategy: dict):
 
 
 def fit_policy_step(net, optimizer, batch_items, extra_fn=None) -> float:
-    """One gradient step of masked-softmax MSE toward the target strategies."""
+    """One gradient step of masked-softmax MSE toward the target strategies.
+    Returns the loss. MSE on probabilities (as in Brown et al.) rather than
+    cross-entropy; its minimizer is still the mean target per infoset."""
     graphs = Batch.from_data_list([g for g, _, _ in batch_items])
     targets = torch.stack([t for _, t, _ in batch_items])
     legal_masks = torch.stack([m for _, _, m in batch_items])

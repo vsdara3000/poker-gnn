@@ -1,6 +1,8 @@
-"""Local Best Response (Lisý & Bowling, 2017) for HULHE: an estimated lower
-bound on a strategy's exploitability, for a game too big for
-`exploitability()`'s exact best response.
+"""Local Best Response (Lisý & Bowling, "Equilibrium Approximation Quality
+of Current No-Limit Poker Bots", 2017) for HULHE: an estimated lower bound
+on a strategy's exploitability, for a game too big for `exploitability()`'s
+exact best response. HULHE-only: it uses hold'em bet sizes and two-card
+hands directly.
 
 Unlike `baseline_eval`'s fixed opponents, LBR adapts to the strategy it's
 playing against. It keeps a *range*, a weighted set of hole-card pairs the
@@ -41,12 +43,15 @@ from poker_gnn.utils.cards import evaluate_hand
 
 
 def _probs_batch(strategy, game, states) -> list[dict[int, float]]:
+    """Strategy probabilities at many states, batched when supported."""
     if hasattr(strategy, "policy_batch"):
         return strategy.policy_batch(game, states)
     return [strategy.policy(game, s) for s in states]
 
 
 def _with_hole_cards(state, player: int, hand: tuple[int, int]):
+    """`state` with `player`'s hole cards swapped for `hand` -- how LBR asks
+    the strategy what it would do holding each hand in the range."""
     h1 = list(state.hole_cards)
     h2 = list(state.hole_cards2)
     h1[player], h2[player] = hand
@@ -65,12 +70,15 @@ class _LBRPlayer:
         self.range: dict[tuple[int, int], float] | None = None
 
     def _init_range(self, state) -> None:
+        """Uniform weight on `range_size` random hands that don't use LBR's
+        own cards (the sample may or may not contain the real hand)."""
         mine = {state.hole_cards[self.seat], state.hole_cards2[self.seat]}
         combos = list(combinations([c for c in range(52) if c not in mine], 2))
         sample = self.rng.sample(combos, min(self.range_size, len(combos)))
         self.range = {hand: 1.0 for hand in sample}
 
     def _live_range(self, state) -> dict[tuple[int, int], float]:
+        """Range hands still possible: nonzero weight, no board conflicts."""
         board = set(state.board)
         return {h: w for h, w in self.range.items() if w > 0 and not (board & set(h))}
 
@@ -85,6 +93,8 @@ class _LBRPlayer:
         self.range = {h: live[h] * p.get(action, 0.0) for h, p in zip(hands, probs)}
 
     def _equity(self, state, hand: tuple[int, int]) -> float:
+        """LBR's showdown equity vs. one opponent hand, from `rollouts`
+        random board completions (exact on the river)."""
         mine = [state.hole_cards[self.seat], state.hole_cards2[self.seat]]
         dead = set(mine) | set(hand) | set(state.board)
         deck = [c for c in range(52) if c not in dead]
@@ -99,6 +109,8 @@ class _LBRPlayer:
         return total / n
 
     def act(self, game, state) -> int:
+        """Greedy choice among fold/call/raise by the formulas in the module
+        docstring."""
         if self.range is None:
             self._init_range(state)
         legal = game.legal_actions(state)
@@ -115,6 +127,10 @@ class _LBRPlayer:
         equities = [self._equity(state, h) for h in hands]
         wp = sum(w * e for w, e in zip(weights, equities)) / total_w
 
+        # `pot` is every chip committed so far, LBR's included. Folding
+        # forfeits LBR's share, so relative to folding, winning is worth the
+        # current pot plus whatever the opponent adds, and losing costs
+        # only what LBR adds from here.
         contrib = [STARTING_STACK - s for s in state.stacks]
         to_call = abs(contrib[0] - contrib[1])
         pot = state.pot
@@ -124,6 +140,8 @@ class _LBRPlayer:
         if Action.FOLD in legal:
             values[Action.FOLD] = 0.0
         if Action.BET_RAISE in legal:
+            # Fold probability: ask the strategy, holding each range hand, what
+            # it does facing our raise.
             after = game.step(state, Action.BET_RAISE)
             opp = 1 - self.seat
             probs = _probs_batch(self.strategy, game, [_with_hole_cards(after, opp, h) for h in hands])
@@ -141,6 +159,7 @@ class _LBRPlayer:
 
 
 def _play_lbr_hand(game, strategy, lbr_seat: int, chance_rng, lbr_rng, strategy_rng, range_size, rollouts):
+    """One hand of LBR in `lbr_seat` vs. `strategy`; returns LBR's payoff."""
     lbr = _LBRPlayer(lbr_seat, strategy, lbr_rng, range_size, rollouts)
     state = game.root()
     while not state.terminal:

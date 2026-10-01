@@ -11,12 +11,18 @@ iteration scales with the traverser's own decision depth and branching, not
 with the size of the whole tree.
 
 This also removes the need for vanilla CFR's explicit opponent-reach weight
-in the regret update: sampling opponent/chance branches proportionally to
-their probability already reflects reach probabilities, so an unweighted
-running average over enough iterations is an unbiased estimator of the true
-(reach-weighted) counterfactual regret -- see Lanctot et al. Theorem 1.
+in the regret update: opponent and chance branches are reached in
+proportion to their probability, and that sampling probability cancels the
+importance weight, so the plain sampled regret is an unbiased estimate of
+the true (reach-weighted) counterfactual regret (Lanctot et al., "Monte
+Carlo Sampling for Regret Minimization in Extensive Games", NIPS 2009).
 Reuses `TabularCFR`'s `_InfosetNode` bookkeeping unchanged, just always
 calling `accumulate_strategy` with reach=1.0.
+
+Used as the cheap tabular baseline on HULHE. Its dict covers only part of
+what a fresh deal reaches, so for evaluation it is paired with a distilled
+strategy network (`solver.distill`); on Kuhn it is checked against the
+closed-form Nash mix (`tests/test_mccfr.py`).
 """
 
 from __future__ import annotations
@@ -35,16 +41,20 @@ class ExternalSamplingCFR:
         self._rng = random.Random(seed)
 
     def iterate(self, game, iterations: int):
+        """Run `iterations` sampled traversals, alternating the traverser
+        between players; returns self for chaining."""
         for i in range(iterations):
             traverser = i % 2
             self._traverse(game, game.root(), traverser)
         return self
 
     def average_strategy(self) -> dict:
+        """{infoset_key: {action: prob}} for every infoset visited so far."""
         return {key: node.average_strategy() for key, node in self._nodes.items()}
 
     def visit_counts(self) -> dict[str, float]:
-        """Per-infoset number of times its strategy was accumulated -- how
+        """Per-infoset number of times its strategy was accumulated (each
+        accumulation adds a distribution summing to 1 at reach 1.0) -- how
         much to trust `average_strategy()` there (a once-visited infoset's
         "average" is just one noisy current strategy)."""
         return {key: sum(node.strategy_sum.values()) for key, node in self._nodes.items()}
@@ -66,11 +76,14 @@ class ExternalSamplingCFR:
         return solver
 
     def _sample(self, outcomes):
+        """Draw one item from a sequence of (item, probability) pairs."""
         items = [item for item, _ in outcomes]
         weights = [weight for _, weight in outcomes]
         return self._rng.choices(items, weights=weights, k=1)[0]
 
     def _traverse(self, game, state, traverser: int) -> float:
+        """Sampled value of `state` for `traverser` under the current
+        strategy profile, updating regrets and strategy sums on the way."""
         if state.terminal:
             return game.returns(state)[traverser]
 
@@ -85,6 +98,8 @@ class ExternalSamplingCFR:
         strategy = node.current_strategy()
 
         if player == traverser:
+            # Traverser: branch over every action and update regrets, with no
+            # reach weighting (see module docstring).
             action_values = {}
             node_value = 0.0
             for action in legal:
@@ -95,6 +110,10 @@ class ExternalSamplingCFR:
                 node.regret_sum[action] += action_values[action] - node_value
             return node_value
 
+        # Opponent: this is where the opponent's average strategy is
+        # accumulated. Its own reach is accounted for by how often sampling
+        # leads here, so the update is unweighted. Then follow one sampled
+        # action.
         node.accumulate_strategy(1.0, strategy)
         action = self._sample([(a, strategy[a]) for a in legal])
         return self._traverse(game, game.step(state, action), traverser)

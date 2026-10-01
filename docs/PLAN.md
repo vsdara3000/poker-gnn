@@ -1,6 +1,6 @@
 # Poker GNN solver — plan
 
-**Current focus: HULHE (phase 3).** Kuhn and Leduc are done (tabular CFR at Nash, GNN/Deep CFR trained on top). See Phase 3 status below.
+**Current focus: HULHE (phase 3).** Kuhn and Leduc are done (tabular CFR at Nash, GNN/Deep CFR trained on top). See Phase 3 status below; the most recent result is the multi-seed sweep near the end of that section.
 
 ## Difficulty ladder
 
@@ -102,10 +102,24 @@ Evaluation and ranging upgrades (done, before the first long run):
 - **Local Best Response (`eval/lbr.py`).** Implements Lisý & Bowling 2017 for HULHE: a Bayes-updated sampled opponent range (`range_size` combos), rollout equity, and a greedy one-step fold/call/raise choice. Its winnings are an estimated *lower bound* on exploitability. It's loose, but it adapts to the strategy it plays against, unlike the fixed baselines. `--lbr-hands N` on train/evaluate turns it on. First smoke numbers (tiny runs, 20 deals, meaningless beyond "it runs"): mccfr 3k iterations +6.1±2.0, deep_cfr 64 iterations +13.9±3.5 chips/hand.
 - **Learned opponent ranging (`DeepCFR(range_net=True)`, `--range-net`).** This is the belief-state idea previously deferred, done as a learned model instead of a per-node Bayesian update. Sampled traversal knows the opponent's real cards, so a third network per player learns to predict the acting player's showdown equity against the opponent's actual hand (`Game.sample_showdown_equity`) and the opponent's made-hand strength, from the hero's infoset alone. That forces it to read the opponent's betting. Its sigmoid outputs are fed into the advantage and strategy nets as extra per-graph features (`PokerGNN(extra_dim=...)`). Validated on Kuhn (it learns J < Q < K equity) and with a save/load round trip; smoke-tested on HULHE. **Not yet shown to help**; that needs an A/B run with multiple seeds.
 
+**First multi-seed A/B sweep (partial, killed before finishing).** `scripts/sweep.py --variants deep deep_range deep_big deep_big_range --seeds 0 1 2 --iterations 3000 --checkpoints 5 --eval-hands 1000 --lbr-hands 200`. All 12 runs were in parallel. The sweep was killed at about 1200-1800 iterations, before any `.pt` was saved. Logs are in `runs/sweep_ab_partial_killed/`. Every run reached the 1200-iteration checkpoint, so the comparison below uses that checkpoint (mean of 3 seeds; each run's own 95% CI is about ±0.15-0.25 on vs_call dup and ±1.0-2.0 on LBR):
+
+| variant | vs_call dup | vs_random dup | LBR @600 | LBR @1200 |
+|---|---|---|---|---|
+| deep (default) | -0.16 | +2.80 | 7.29 | 6.37 |
+| deep_range | -0.21 | +2.69 | 8.72 | 6.66 |
+| deep_big | +0.02 | +2.18 | 4.85 | 5.95 |
+| deep_big_range | -0.07 | +2.30 | 4.97 | 4.70 |
+
+- **The earlier "beats always-call" result does not hold up.** With duplicate dealing and 1000 deals, every variant is within about ±0.3 of break-even against always-call, and most of them are slightly negative. The earlier single-seat numbers such as +0.638 were noise, as the caveat above predicted. Crushing uniform-random (+2 to +3 chips/hand) does hold.
+- LBR goes down from 600 to 1200 iterations for the default and range-net configs (deep at 1800: 6.27 across 3 seeds), but slowly. All configs are still highly exploitable, at roughly 5-7 chips/hand.
+- Range net on vs. off: no effect at this length that the seed spread and CIs can resolve. deep_big_range's lower mean comes mostly from one seed (s0: 2.6). The "bigger" config's early LBR is lower but doesn't keep improving between 600 and 1200.
+- Next step: re-run to completion (3000+ iterations) and add an LBR measurement of always-call as the trivial reference point.
+
 Other not done yet:
 
 - No exploitability trend or a "done when" call for phase 3. LBR now exists, so the proposed bar is: LBR lower bound trending down across checkpoints, and deep_cfr's LBR clearly below a trivial strategy's, such as always-call's (not yet measured at a meaningful sample size).
-- No multi-seed comparisons yet: default vs. "bigger" config, and range net on vs. off.
+- Multi-seed comparisons so far are only the partial sweep above. None of them have run to completion yet.
 - No real long training run yet with the card_graph caching speedup in place.
 
 ## Shared pieces (keep game-agnostic)

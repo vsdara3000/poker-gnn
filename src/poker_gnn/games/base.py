@@ -1,3 +1,11 @@
+"""Shared game interface: `Player`, `Action`, the immutable `State`, and the
+abstract `Game` every rule set implements.
+
+Everything downstream (tabular CFR, MCCFR, Deep CFR, the graph encoders,
+exploitability / baseline / LBR evaluation) is written against this file
+only, never against a specific game.
+"""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -7,12 +15,19 @@ from typing import Sequence
 
 
 class Player(IntEnum):
+    """Whose turn it is. CHANCE marks card-dealing nodes."""
+
     CHANCE = -1
     P0 = 0
     P1 = 1
 
 
 class Action(IntEnum):
+    """The three limit-poker actions, shared by every game. CHECK_CALL and
+    BET_RAISE each cover two moves (which one depends on whether the actor
+    faces a bet), which keeps the action space a fixed size of 3 for the
+    networks' output heads."""
+
     FOLD = 0
     CHECK_CALL = 1
     BET_RAISE = 2
@@ -20,7 +35,12 @@ class Action(IntEnum):
 
 @dataclass(frozen=True)
 class State:
-    """Immutable snapshot of a public+private game state."""
+    """Immutable snapshot of a game state, including *both* players' private
+    cards. Solvers must go through `infoset_key` / the encoders to get what
+    one player is allowed to see.
+
+    `pot` and `stacks` are in chips; `round` is the betting round (0-based);
+    `player` is the actor (or `Player.CHANCE`, with `chance=True`)."""
 
     player: int
     hole_cards: tuple[int | None, int | None]
@@ -58,11 +78,11 @@ class Game(ABC):
 
     @abstractmethod
     def root(self) -> State:
-        ...
+        """Start of a hand: antes/blinds posted, no cards dealt (a chance node)."""
 
     @abstractmethod
     def legal_actions(self, state: State) -> Sequence[int]:
-        ...
+        """`Action`s available to the player to act; empty at chance/terminal nodes."""
 
     @abstractmethod
     def chance_outcomes(self, state: State) -> Sequence[tuple[int, float]]:
@@ -70,24 +90,27 @@ class Game(ABC):
 
     @abstractmethod
     def step(self, state: State, action: int) -> State:
-        ...
+        """Return the successor state. `action` is a card id at chance nodes,
+        an `Action` otherwise. Never mutates `state`."""
 
     @abstractmethod
     def returns(self, state: State) -> tuple[float, float]:
-        """Payoffs for (P0, P1) at terminal nodes. Zero-sum."""
+        """Net chip payoffs for (P0, P1) at a terminal node (winner gets the
+        loser's total contribution). Zero-sum."""
 
     @abstractmethod
     def card_names(self) -> Sequence[str]:
-        ...
+        """Human-readable name for each card id, e.g. ("J", "Q", "K")."""
 
     @abstractmethod
     def num_cards(self) -> int:
-        ...
+        """Deck size. Card ids are 0..num_cards()-1; also the card graph's node count."""
 
     def num_suits(self) -> int:
         """Cards are grouped into contiguous rank-blocks of this size, i.e.
         card id `i` has rank `i // num_suits()`. 1 means every card is its
-        own rank (Kuhn); Leduc's 6-card deck (3 ranks x 2 suits) is 2."""
+        own rank (Kuhn); Leduc's 6-card deck (3 ranks x 2 suits) is 2;
+        HULHE's 52-card deck is 4."""
         return 1
 
     def hand_strength(self, hole_cards: tuple[int, ...], board: tuple[int, ...]) -> float | None:
