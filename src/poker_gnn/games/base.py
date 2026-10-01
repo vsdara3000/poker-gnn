@@ -57,6 +57,11 @@ class State:
     # current round's), so multi-round games use this to recover the
     # current round's local sub-sequence. Always 0 for single-round games.
     round_start: int = 0
+    # Index into `history` where each round after the first began (round 0
+    # always starts at 0), so `round_starts[-1] == round_start` once a later
+    # round is underway. Lets the betting-graph encoder label every past
+    # action with its true round, not just split current vs. earlier.
+    round_starts: tuple[int, ...] = ()
     # A second hole card per player, for games that deal more than one (only
     # HULHE so far). Kuhn/Leduc deal exactly one and leave this (None, None),
     # so infoset_key's formatting of it is a no-op for them.

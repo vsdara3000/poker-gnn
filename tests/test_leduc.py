@@ -204,3 +204,19 @@ def test_leduc_infoset_count():
     game = LeducPoker()
     infosets, _ = _collect_tree(game, game.root())
     assert len(infosets) == 936
+
+
+def test_sample_showdown_equity_matches_showdown_ranking():
+    import random
+
+    game = LeducPoker()
+    rng = random.Random(0)
+    state = game.root()
+    state = game.step(state, 4)  # P0 Ks
+    state = game.step(state, 0)  # P1 Js
+    state = game.step(state, Action.CHECK_CALL)
+    state = game.step(state, Action.CHECK_CALL)
+    state = game.step(state, 1)  # board Jh: P1 pairs it
+    assert state.board == (1,)
+    assert game.sample_showdown_equity(state, 0, rng) == 0.0
+    assert game.sample_showdown_equity(state, 1, rng) == 1.0

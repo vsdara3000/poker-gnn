@@ -373,6 +373,8 @@ class DeepCFR:
         """The acting player's estimated showdown equity vs. the opponent's
         range, and the opponent's estimated made-hand strength. Requires
         range_net=True."""
+        if not self.range_net:
+            raise ValueError("estimate_range needs a solver trained with range_net=True")
         batch = Batch.from_data_list([self.encoder.encode(game, state, state.player)])
         equity, opp_strength = self._range_features(state.player, batch)[0].tolist()
         return {"equity": equity, "opp_strength": opp_strength}

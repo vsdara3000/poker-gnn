@@ -17,32 +17,33 @@ NUM_ACTION_TYPES = len(Action)
 ACTION_FEATURE_DIM = NUM_ACTION_TYPES + 1 + 1 + 1 + 1
 
 
-def _round_index_and_actor(i: int, round_start: int, current_round: int) -> tuple[int, int]:
+def _round_index_and_actor(i: int, round_starts: tuple[int, ...]) -> tuple[int, int]:
     """Which round action `i` (an index into the full `history`) belongs to,
     and its position parity within that round (0 = first to act).
 
-    Only the current round's boundary is known (`round_start`), so every
-    earlier action is labeled `current_round - 1` with global parity. That is
-    exact for Leduc (two rounds, P0 always first) but approximate for HULHE:
-    rounds before the previous one get the wrong index, and the parity is
-    not the seat, since P1 acts first after the flop."""
-    if i < round_start:
-        return current_round - 1, i % 2
-    return current_round, (i - round_start) % 2
+    `round_starts` holds the history index where each round after the first
+    began (see `State.round_starts`). Each game fixes who acts first in a
+    given round, so (round, parity) also determines the seat."""
+    round_idx = 0
+    start = 0
+    for r, s in enumerate(round_starts, start=1):
+        if i < s:
+            break
+        round_idx, start = r, s
+    return round_idx, (i - start) % 2
 
 
 def betting_graph(state):
     """Node features [n, ACTION_FEATURE_DIM] and path edges for `state.history`,
     where n = len(history) + 1."""
     history = state.history
-    round_start = state.round_start
     n = len(history) + 1  # +1 for the start node
 
     feats = [[0.0] * NUM_ACTION_TYPES + [1.0, 0.0, 0.0, 0.0]]  # start node
     for i, action in enumerate(history):
         onehot = [0.0] * NUM_ACTION_TYPES
         onehot[int(action)] = 1.0
-        round_idx, acting_player = _round_index_and_actor(i, round_start, state.round)
+        round_idx, acting_player = _round_index_and_actor(i, state.round_starts)
         position = (i + 1) / n
         feats.append(onehot + [0.0, float(acting_player), float(round_idx), position])
     x = torch.tensor(feats, dtype=torch.float32)

@@ -125,6 +125,7 @@ class LeducPoker(Game):
                     terminal=False,
                     chance=True,
                     round_start=state.round_start,
+                    round_starts=state.round_starts,
                 )
             if state.hole_cards[1] is None:
                 return State(
@@ -151,6 +152,7 @@ class LeducPoker(Game):
                 terminal=False,
                 chance=False,
                 round_start=len(state.history),
+                round_starts=state.round_starts + (len(state.history),),
             )
 
         actor = state.player
@@ -181,6 +183,7 @@ class LeducPoker(Game):
                 terminal=True,
                 chance=False,
                 round_start=state.round_start,
+                round_starts=state.round_starts,
             )
 
         if not _round_ends(local_history, action, level):
@@ -196,6 +199,7 @@ class LeducPoker(Game):
                 terminal=False,
                 chance=False,
                 round_start=state.round_start,
+                round_starts=state.round_starts,
             )
 
         if state.round == 1:
@@ -210,6 +214,7 @@ class LeducPoker(Game):
                 terminal=True,
                 chance=False,
                 round_start=state.round_start,
+                round_starts=state.round_starts,
             )
 
         return State(
@@ -223,6 +228,7 @@ class LeducPoker(Game):
             terminal=False,
             chance=True,
             round_start=state.round_start,  # unused pre-deal; reset once the board card lands
+            round_starts=state.round_starts,
         )
 
     def returns(self, state: State) -> tuple[float, float]:
@@ -262,6 +268,21 @@ class LeducPoker(Game):
         result[winner] = payoff
         result[loser] = -payoff
         return (result[0], result[1])
+
+    def sample_showdown_equity(self, state: State, player: int, rng) -> float | None:
+        # Same ranking as `returns`: pairing the board wins, else higher rank.
+        mine, theirs = state.hole_cards[player], state.hole_cards[1 - player]
+        if mine is None or theirs is None:
+            return None
+        if state.board:
+            board = state.board[0]
+        else:
+            board = rng.choice([c for c in range(self.num_cards()) if c not in (mine, theirs)])
+        ours, other = mine // 2, theirs // 2
+        paired_ours, paired_other = ours == board // 2, other == board // 2
+        if paired_ours != paired_other:
+            return 1.0 if paired_ours else 0.0
+        return 1.0 if ours > other else 0.5 if ours == other else 0.0
 
     def card_names(self):
         return ("Js", "Jh", "Qs", "Qh", "Ks", "Kh")

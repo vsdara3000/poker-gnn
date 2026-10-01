@@ -94,6 +94,8 @@ def report_solver(
             f"dup={r.duplicate:+.3f}±{1.96 * r.duplicate_se:.3f}"
         )
 
+    if lbr_hands > 0 and game_name == "hulhe" and strategy is None:
+        print("    lbr skipped: needs a generalizing strategy (drop --no-distill)")
     if lbr_hands > 0 and game_name == "hulhe" and strategy is not None:
         r = local_best_response(game, strategy, lbr_hands, rng)
         print(

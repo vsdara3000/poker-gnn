@@ -2,9 +2,9 @@
 
 52 cards, 2 hole cards each, 4 betting rounds (preflop / flop / turn /
 river), community board grows 0 -> 3 -> 4 -> 5. Small bet is 2 (preflop,
-flop), big bet is 4 (turn, river); cap of 4 bet/raise actions per round.
-Preflop the big blind does not count toward that cap, so preflop allows
-one more raise than standard limit rules (blind + 4 raises). Blinds: P0 (button) posts the small blind and acts
+flop), big bet is 4 (turn, river); standard 4-bet cap per round, with the
+big blind counting as the first preflop bet (so blind + 3 raises preflop,
+bet + 3 raises after). Blinds: P0 (button) posts the small blind and acts
 first preflop; P1 (big blind) acts first in every later round -- the
 "big blind option" (P0 completes the blind, P1 still gets to check or
 raise before preflop can close) falls out of the same round-closing rule
@@ -31,17 +31,19 @@ from poker_gnn.utils.cards import STRAIGHT_FLUSH, deck_card_names, evaluate_hand
 SMALL_BLIND = 1
 BIG_BLIND = 2
 BET_SIZES = (2, 2, 4, 4)  # preflop, flop, turn, river
-MAX_RAISES = 4  # bet + 3 raises postflop; preflop it is 4 raises on top of the big blind
+# voluntary bets/raises allowed per round: the big blind is already the
+# first of preflop's 4 bets, so only 3 more fit
+MAX_RAISES = (3, 4, 4, 4)  # preflop, flop, turn, river
 BOARD_TARGET_LEN = {1: 3, 2: 4, 3: 5}  # community cards once round `r` begins
-# max a player can ever contribute: preflop (big blind + 4 raises) plus
+# max a player can ever contribute: preflop (big blind + 3 raises) plus
 # flop/turn/river at 4 bets each. Stacks are sized so a player can never
 # run out of chips, so there is no all-in logic.
 STARTING_STACK = (
     BIG_BLIND
-    + MAX_RAISES * BET_SIZES[0]
-    + MAX_RAISES * BET_SIZES[1]
-    + MAX_RAISES * BET_SIZES[2]
-    + MAX_RAISES * BET_SIZES[3]
+    + MAX_RAISES[0] * BET_SIZES[0]
+    + MAX_RAISES[1] * BET_SIZES[1]
+    + MAX_RAISES[2] * BET_SIZES[2]
+    + MAX_RAISES[3] * BET_SIZES[3]
 )
 
 
@@ -123,7 +125,7 @@ class HeadsUpLimitHoldem(Game):
         if contrib[actor] < level:
             actions.append(Action.FOLD)
         actions.append(Action.CHECK_CALL)
-        if raises < MAX_RAISES:
+        if raises < MAX_RAISES[state.round]:
             actions.append(Action.BET_RAISE)
         return tuple(actions)
 
@@ -155,6 +157,7 @@ class HeadsUpLimitHoldem(Game):
                     terminal=False,
                     chance=True,
                     round_start=state.round_start,
+                    round_starts=state.round_starts,
                 )
             if state.hole_cards2[0] is None:
                 return State(
@@ -169,6 +172,7 @@ class HeadsUpLimitHoldem(Game):
                     terminal=False,
                     chance=True,
                     round_start=state.round_start,
+                    round_starts=state.round_starts,
                 )
             if state.hole_cards[1] is None:
                 return State(
@@ -183,6 +187,7 @@ class HeadsUpLimitHoldem(Game):
                     terminal=False,
                     chance=True,
                     round_start=state.round_start,
+                    round_starts=state.round_starts,
                 )
             if state.hole_cards2[1] is None:
                 return State(
@@ -214,6 +219,7 @@ class HeadsUpLimitHoldem(Game):
                     terminal=False,
                     chance=True,
                     round_start=state.round_start,
+                    round_starts=state.round_starts,
                 )
             return State(
                 player=Player(_first_actor(state.round)),
@@ -227,6 +233,7 @@ class HeadsUpLimitHoldem(Game):
                 terminal=False,
                 chance=False,
                 round_start=len(state.history),
+                round_starts=state.round_starts + (len(state.history),),
             )
 
         actor = state.player
@@ -258,6 +265,7 @@ class HeadsUpLimitHoldem(Game):
                 terminal=True,
                 chance=False,
                 round_start=state.round_start,
+                round_starts=state.round_starts,
             )
 
         if not _round_ends(raises, local_history, action):
@@ -275,6 +283,7 @@ class HeadsUpLimitHoldem(Game):
                 terminal=False,
                 chance=False,
                 round_start=state.round_start,
+                round_starts=state.round_starts,
             )
 
         if state.round == 3:
@@ -290,6 +299,7 @@ class HeadsUpLimitHoldem(Game):
                 terminal=True,
                 chance=False,
                 round_start=state.round_start,
+                round_starts=state.round_starts,
             )
 
         return State(
@@ -304,6 +314,7 @@ class HeadsUpLimitHoldem(Game):
             terminal=False,
             chance=True,
             round_start=state.round_start,  # unused until the new round's community cards land
+            round_starts=state.round_starts,
         )
 
     def returns(self, state: State) -> tuple[float, float]:

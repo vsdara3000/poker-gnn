@@ -112,17 +112,41 @@ def test_board_grows_zero_three_four_five():
         assert len(state.board) == expected_len
 
 
-def test_raise_cap_is_four_per_round():
+def test_preflop_cap_counts_the_big_blind_as_the_first_bet():
     game = HeadsUpLimitHoldem()
     state = _deal(game, [0, 1, 4, 5])
-    for _ in range(4):
+    for _ in range(3):
         assert Action.BET_RAISE in game.legal_actions(state)
         state = game.step(state, Action.BET_RAISE)
     assert Action.BET_RAISE not in game.legal_actions(state)
     assert set(game.legal_actions(state)) == {Action.FOLD, Action.CHECK_CALL}
-    # level = big blind(2) + 4 raises of the preflop bet size(2) = 10
+    # level = big blind(2) + 3 raises of the preflop bet size(2) = 8 (4 bets)
     state = game.step(state, Action.CHECK_CALL)
-    assert state.stacks == (STARTING_STACK - 10, STARTING_STACK - 10)
+    assert state.stacks == (STARTING_STACK - 8, STARTING_STACK - 8)
+
+
+def test_postflop_cap_is_four_bets():
+    game = HeadsUpLimitHoldem()
+    state = _deal(game, [0, 1, 4, 5])
+    state = game.step(state, Action.CHECK_CALL)
+    state = game.step(state, Action.CHECK_CALL)
+    state = _deal_street(game, state)
+    for _ in range(4):
+        assert Action.BET_RAISE in game.legal_actions(state)
+        state = game.step(state, Action.BET_RAISE)
+    assert Action.BET_RAISE not in game.legal_actions(state)
+
+
+def test_round_starts_records_every_round_boundary():
+    game = HeadsUpLimitHoldem()
+    state = _deal(game, [0, 1, 4, 5])
+    assert state.round_starts == ()
+    for expected in ((2,), (2, 4), (2, 4, 6)):
+        state = game.step(state, Action.CHECK_CALL)
+        state = game.step(state, Action.CHECK_CALL)
+        state = _deal_street(game, state)
+        assert state.round_starts == expected
+        assert state.round_start == expected[-1]
 
 
 def test_fold_awards_the_pot_without_showdown():

@@ -42,7 +42,7 @@ Same idea at hold'em scale. Do not try a full Cepheus-style solve. Abstraction, 
 Built and tested so far:
 
 - `utils/cards.py` — 5/6/7-card hand evaluator (`evaluate_hand`), validated both by unit tests and by sampling 200k random 5-card hands and matching known category odds (`tests/test_cards.py`).
-- `games/hulhe.py` — full rules: 2 hole cards/player, 4 rounds (preflop/flop/turn/river), blinds + the big-blind option, small/big bet sizing, a 4-raise cap per round. `base.State` gained `hole_cards2` (second hole card) and `round_start` was already there from Leduc. Validated via scripted lines (blind option, raise cap, fold payoffs, a real quads-vs-full-house showdown) plus 20k random Monte Carlo playouts checked for zero-sum / no negative stacks (`tests/test_hulhe.py`). The full tree is too big to enumerate (~10^14 infosets), so unlike Kuhn/Leduc there's no exhaustive tree test here.
+- `games/hulhe.py` — full rules: 2 hole cards/player, 4 rounds (preflop/flop/turn/river), blinds + the big-blind option, small/big bet sizing, a 4-bet cap per round (the big blind counts as the first preflop bet; see the bug-fix note below). `base.State` gained `hole_cards2` (second hole card) and `round_start` was already there from Leduc. Validated via scripted lines (blind option, raise cap, fold payoffs, a real quads-vs-full-house showdown) plus 20k random Monte Carlo playouts checked for zero-sum / no negative stacks (`tests/test_hulhe.py`). The full tree is too big to enumerate (~10^14 infosets), so unlike Kuhn/Leduc there's no exhaustive tree test here.
 - `solver/mccfr.py` (`ExternalSamplingCFR`) — tabular CFR replacement for games too big for full-width traversal: only the traverser's own decisions branch over every action; opponent + chance are sampled once. Validated against Kuhn's known closed-form Nash mix (`tests/test_mccfr.py`) before trusting it on HULHE.
 - `solver/deep_cfr.py` gained `external_sampling=True` mode — same sampling algorithm, GNN instead of a regret table. Validated on Kuhn (`tests/test_deep_cfr.py::test_sampled_deep_cfr_*`).
 - `graphs/infoset_graph.py` fixed to flag *both* hero hole cards (was only flagging one — a real gap for any 2-card-hand game, silent before HULHE existed to expose it).
@@ -115,6 +115,14 @@ Evaluation and ranging upgrades (done, before the first long run):
 - LBR goes down from 600 to 1200 iterations for the default and range-net configs (deep at 1800: 6.27 across 3 seeds), but slowly. All configs are still highly exploitable, at roughly 5-7 chips/hand.
 - Range net on vs. off: no effect at this length that the seed spread and CIs can resolve. deep_big_range's lower mean comes mostly from one seed (s0: 2.6). The "bigger" config's early LBR is lower but doesn't keep improving between 600 and 1200.
 - Next step: re-run to completion (3000+ iterations) and add an LBR measurement of always-call as the trivial reference point.
+
+**Bug fixes after the sweep (2026-09-30). All HULHE results above predate them.**
+
+- The betting-graph encoder labeled actions with the wrong round. `State` only knew where the *current* round started, so every earlier action got `current_round - 1` and global parity. On the river, preflop and flop actions were encoded as turn actions. `State.round_starts` now records every round boundary, and each action gets its true round and its position within that round (`tests/test_betting_graph.py`). This is exact for Leduc too, where the old encoding happened to be correct.
+- HULHE's preflop cap allowed one raise too many. The big blind wasn't counted as a bet, so preflop allowed the blind plus 4 raises. It is now the standard 4-bet cap with the blind as the first bet: `MAX_RAISES = (3, 4, 4, 4)`.
+- Leduc now implements `sample_showdown_equity`, so `DeepCFR(range_net=True)` actually trains its range net there. Before, it silently collected no examples. `estimate_range` raises a clear error without `range_net`. `_report` says when it skips LBR because of `--no-distill`.
+
+The game and its encoding both changed, so the HULHE numbers above, including the sweep, are not directly comparable with new runs.
 
 Other not done yet:
 
